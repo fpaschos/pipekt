@@ -1,5 +1,7 @@
 package io.github.fpaschos.pipekt.core
 
+import kotlin.reflect.KType
+
 /**
  * Base type for all pipeline operators: source, steps, filter, and persist-each.
  *
@@ -31,14 +33,21 @@ data class SourceDef<T>(
  * [fn] receives the current payload (or previous step output) and [StepCtx]; it can raise [E]
  * for retryable or fatal errors. The runtime invokes it in a [Raise] context.
  *
+ * [inputType] and [outputType] are captured at DSL call sites via `inline reified` and are used
+ * for type-chain validation at pipeline build time and for payload serialization at runtime.
+ *
  * @param name Unique step name.
  * @param retryPolicy How many attempts and backoff; default is single attempt.
  * @param fn The step function; see [StepFn].
+ * @param inputType The [KType] of the input payload [I]; captured via `typeOf<I>()` at the call site.
+ * @param outputType The [KType] of the output payload [O]; captured via `typeOf<O>()` at the call site.
  */
 data class StepDef<I, O, E>(
     override val name: String,
     val retryPolicy: RetryPolicy = RetryPolicy(maxAttempts = 1),
     val fn: StepFn<I, O, E>,
+    val inputType: KType,
+    val outputType: KType,
 ) : OperatorDef()
 
 /**
@@ -47,14 +56,20 @@ data class StepDef<I, O, E>(
  * [predicate] returns true to keep the item, false to filter it out. Filtered items use
  * [filteredReason] for observability (e.g. [FilteredReason.DUPLICATE]).
  *
+ * [inputType] is captured at the DSL call site via `inline reified` and is used for type-chain
+ * validation. The output type of a filter is always the same as its input type (items pass through
+ * unchanged when kept).
+ *
  * @param name Unique step name.
  * @param filteredReason Reason used when the item is filtered; default [FilteredReason.BELOW_THRESHOLD].
  * @param predicate Step function returning true to keep, false to filter out.
+ * @param inputType The [KType] of the input payload [T]; captured via `typeOf<T>()` at the call site.
  */
 data class FilterDef<T, E>(
     override val name: String,
     val filteredReason: FilteredReason = FilteredReason.BELOW_THRESHOLD,
     val predicate: StepFn<T, Boolean, E>,
+    val inputType: KType,
 ) : OperatorDef()
 
 /**

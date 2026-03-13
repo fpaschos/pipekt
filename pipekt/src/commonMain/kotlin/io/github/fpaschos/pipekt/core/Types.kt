@@ -98,7 +98,7 @@ data class RetryPolicy(
 // ── Failure hierarchy ─────────────────────────────────────────────────────────
 
 /**
- * Reason for filtering an item out of the pipeline (used with [ItemFailure.Filtered]).
+ * Reason for filtering an item out of the pipeline (used with [CoreFailure.Filtered]).
  *
  * - [BELOW_THRESHOLD]: Item did not meet a business threshold (e.g. score).
  * - [DUPLICATE]: Item was identified as duplicate and excluded.
@@ -107,45 +107,87 @@ data class RetryPolicy(
 enum class FilteredReason { BELOW_THRESHOLD, DUPLICATE, EXCLUDED }
 
 /**
- * Sealed hierarchy of item outcomes: filtered, retryable failure, fatal failure, or infrastructure failure.
+ * Open interface for all step failure outcomes in the pipeline.
  *
- * Steps raise these (or domain types) via the [Raise] context; the runtime uses them for
- * checkpointing and retry/backoff behavior.
+ * Implement this interface on your own domain error types to integrate with the runtime's
+ * routing logic without wrapping. The runtime dispatches on [isRetryable] and [isFiltered]
+ * to decide whether to retry, filter, or permanently fail an item.
+ *
+ * The library-provided sealed hierarchy [CoreFailure] covers the common cases. Custom domain
+ * errors should implement this interface and override the routing methods as needed.
+ *
+ * Example:
+ * ```kotlin
+ * data class GatewayTimeout(val code: Int) : ItemFailure {
+ *     override val message = "Gateway timeout: $code"
+ *     override fun isRetryable() = true
+ * }
+ * ```
  */
-sealed class ItemFailure {
+interface ItemFailure {
+    /** Human-readable description of the failure; used for logging and [WorkItem.lastErrorJson]. */
+    val message: String
+
     /**
-     * Item was filtered out (e.g. by a [FilterDef] predicate).
+     * Returns true if the runtime should schedule another attempt according to the step's [RetryPolicy].
+     * Defaults to false (fatal — no retry).
+     */
+    fun isRetryable(): Boolean = false
+
+    /**
+     * Returns true if the item should be marked [WorkItemStatus.FILTERED] rather than [WorkItemStatus.FAILED].
+     * Defaults to false.
+     */
+    fun isFiltered(): Boolean = false
+}
+
+/**
+ * Library-owned sealed hierarchy of common failure outcomes; all implement [ItemFailure].
+ *
+ * Use these in steps via the Arrow [Raise] DSL (`raise(CoreFailure.Fatal("reason"))`).
+ * For domain-specific errors with custom retry logic, implement [ItemFailure] directly instead.
+ */
+sealed class CoreFailure : ItemFailure {
+    /**
+     * Permanent business failure; no retry. Item is checkpointed as FAILED.
+     * @param message Human-readable cause.
+     */
+    data class Fatal(
+        override val message: String,
+    ) : CoreFailure()
+
+    /**
+     * Transient failure; runtime retries according to the step's [RetryPolicy].
+     * @param message Human-readable cause (e.g. for logging).
+     * @param attempt The attempt number that failed (1-based).
+     */
+    data class Retryable(
+        override val message: String,
+        val attempt: Int,
+    ) : CoreFailure() {
+        override fun isRetryable() = true
+    }
+
+    /**
+     * Item was filtered out (e.g. by a predicate). Checkpointed as FILTERED, not FAILED.
      * @param reason Why the item was filtered; see [FilteredReason].
      */
     data class Filtered(
         val reason: FilteredReason,
-    ) : ItemFailure()
+    ) : CoreFailure() {
+        override val message: String get() = reason.name
+
+        override fun isFiltered() = true
+    }
 
     /**
-     * Transient failure; runtime may retry according to [RetryPolicy].
-     * @param cause Human-readable cause (e.g. for logging).
-     * @param attemptNumber The attempt that failed (1-based).
-     */
-    data class Retryable(
-        val cause: String,
-        val attemptNumber: Int,
-    ) : ItemFailure()
-
-    /**
-     * Permanent business failure; no retry. Item is checkpointed as FAILED.
-     * @param cause Human-readable cause.
-     */
-    data class Fatal(
-        val cause: String,
-    ) : ItemFailure()
-
-    /**
-     * Infrastructure or system failure (e.g. timeout, connection); may be retried by policy.
-     * @param cause Human-readable cause.
+     * Infrastructure or system failure (e.g. timeout, connection error).
+     * Treated as fatal by default; override [isRetryable] on a custom type for retryable infra errors.
+     * @param message Human-readable cause.
      */
     data class InfrastructureFailure(
-        val cause: String,
-    ) : ItemFailure()
+        override val message: String,
+    ) : CoreFailure()
 }
 
 // ── Work item status ──────────────────────────────────────────────────────────
