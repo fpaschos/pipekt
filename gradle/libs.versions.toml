@@ -1,5 +1,8 @@
 [versions]
+pipekt-version        = "0.1.0"
 kotlin                = "2.3.0"
+ktlint-plugin         = "13.1.0"
+ktlint-rules          = "1.7.1"
 arrow                 = "2.2.1.1"
 kotlinx-coroutines    = "1.10.1"
 kotlinx-serialization = "1.10.0"
@@ -24,3 +27,4 @@ kotlinx-serialization = ["kotlinx-serialization-core", "kotlinx-serialization-js
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform",        version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+ktlint               = { id = "org.jlleitschuh.gradle.ktlint",             version.ref = "ktlint-plugin" }

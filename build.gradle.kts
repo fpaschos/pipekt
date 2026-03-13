@@ -1,50 +1,72 @@
 import org.gradle.api.tasks.testing.logging.TestLogEvent
+import org.jlleitschuh.gradle.ktlint.KtlintExtension
+import org.jlleitschuh.gradle.ktlint.reporter.ReporterType
+
+group = "io.github.fpaschos"
+version = libs.versions.pipekt.version
+    .get()
 
 plugins {
-    alias(libs.plugins.kotlin.multiplatform)
-    alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.kotlin.multiplatform) apply false
+    alias(libs.plugins.kotlin.serialization) apply false
+    alias(libs.plugins.ktlint) apply false
 }
-
-group   = "io.github.fpaschos"
-version = "0.1.0"
 
 repositories {
     mavenCentral()
 }
 
-kotlin {
-    jvm()
+val ktlintRules = libs.versions.ktlint.rules
+val ktlintPlugin = libs.plugins.ktlint
+    .get()
+    .pluginId
 
-    compilerOptions {
-        freeCompilerArgs.add("-opt-in=kotlin.uuid.ExperimentalUuidApi")
+subprojects {
+    version = rootProject.version
+
+    repositories {
+        mavenCentral()
     }
 
-    sourceSets {
-        all {
-            languageSettings {
-                enableLanguageFeature("ContextParameters")
+    apply(plugin = ktlintPlugin)
+
+    configure<KtlintExtension> {
+        version.set(ktlintRules)
+        verbose.set(true)
+        outputToConsole.set(true)
+        coloredOutput.set(true)
+        reporters { reporter(ReporterType.HTML) }
+    }
+
+    tasks.withType<Test> {
+        useJUnitPlatform()
+
+        testLogging { events = setOf(TestLogEvent.PASSED, TestLogEvent.FAILED, TestLogEvent.SKIPPED) }
+
+        addTestListener(object : TestListener {
+            override fun beforeSuite(suite: TestDescriptor) {}
+
+            override fun beforeTest(testDescriptor: TestDescriptor) {}
+
+            override fun afterTest(
+                testDescriptor: TestDescriptor,
+                result: TestResult,
+            ) {
             }
-        }
-        configureEach {
-            languageSettings.progressiveMode = true
-        }
-        commonMain.dependencies {
-            implementation(libs.bundles.arrow)
-            implementation(libs.bundles.kotlinx.serialization)
-            implementation(libs.kotlinx.coroutines.core)
-        }
-        commonTest.dependencies {
-            implementation(libs.kotest.framework.engine)
-            implementation(libs.kotest.assertions.core)
-        }
-        jvmTest.dependencies {
-            implementation(libs.kotest.runner.junit5)
-            implementation(libs.kotest.assertions.arrow)
-        }
-    }
-}
 
-tasks.withType<Test> {
-    useJUnitPlatform()
-    testLogging { events = setOf(TestLogEvent.PASSED, TestLogEvent.FAILED, TestLogEvent.SKIPPED) }
+            override fun afterSuite(
+                suite: TestDescriptor,
+                result: TestResult,
+            ) {
+                if (suite.parent == null) {
+                    println("\nTest result: ${result.resultType}")
+                    val summary = "Test summary: ${result.testCount} tests, " +
+                        "${result.successfulTestCount} succeeded, " +
+                        "${result.failedTestCount} failed, " +
+                        "${result.skippedTestCount} skipped"
+                    println(summary)
+                }
+            }
+        })
+    }
 }
