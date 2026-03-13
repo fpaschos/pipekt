@@ -30,8 +30,9 @@ data class SourceDef<T>(
 /**
  * Transform step: applies [fn] to each item with [RetryPolicy] for retries.
  *
- * [fn] receives the current payload (or previous step output) and [StepCtx]; it can raise [E]
- * for retryable or fatal errors. The runtime invokes it in a [Raise] context.
+ * [fn] receives the current payload (or previous step output) and [StepCtx]; it raises
+ * [ItemFailure] (or any subtype) for retryable, filtered, or fatal errors. The runtime
+ * invokes it in a [Raise]<[ItemFailure]> context.
  *
  * [inputType] and [outputType] are captured at DSL call sites via `inline reified` and are used
  * for type-chain validation at pipeline build time and for payload serialization at runtime.
@@ -42,10 +43,10 @@ data class SourceDef<T>(
  * @param inputType The [KType] of the input payload [I]; captured via `typeOf<I>()` at the call site.
  * @param outputType The [KType] of the output payload [O]; captured via `typeOf<O>()` at the call site.
  */
-data class StepDef<I, O, E>(
+data class StepDef<I, O>(
     override val name: String,
     val retryPolicy: RetryPolicy = RetryPolicy(maxAttempts = 1),
-    val fn: StepFn<I, O, E>,
+    val fn: StepFn<I, O>,
     val inputType: KType,
     val outputType: KType,
 ) : OperatorDef()
@@ -62,13 +63,13 @@ data class StepDef<I, O, E>(
  *
  * @param name Unique step name.
  * @param filteredReason Reason used when the item is filtered; default [FilteredReason.BELOW_THRESHOLD].
- * @param predicate Step function returning true to keep, false to filter out.
+ * @param predicate Step function returning true to keep, false to filter out; raises [ItemFailure].
  * @param inputType The [KType] of the input payload [T]; captured via `typeOf<T>()` at the call site.
  */
-data class FilterDef<T, E>(
+data class FilterDef<T>(
     override val name: String,
     val filteredReason: FilteredReason = FilteredReason.BELOW_THRESHOLD,
-    val predicate: StepFn<T, Boolean, E>,
+    val predicate: StepFn<T, Boolean>,
     val inputType: KType,
 ) : OperatorDef()
 

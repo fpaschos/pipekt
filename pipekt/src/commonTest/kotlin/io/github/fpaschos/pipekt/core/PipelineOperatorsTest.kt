@@ -35,9 +35,9 @@ class PipelineOperatorsTest :
             val def =
                 pipeline("retry-test", maxInFlight = 10) {
                     source("src", fakeAdapter())
-                    step<String, String, ItemFailure>("with-retry", retryPolicy = policy) { it }
+                    step<String, String>("with-retry", retryPolicy = policy) { it }
                 }.shouldBeRight()
-            val stepOp = def.operators.filterIsInstance<StepDef<*, *, *>>().first()
+            val stepOp = def.operators.filterIsInstance<StepDef<*, *>>().first()
             stepOp.name shouldBe "with-retry"
             stepOp.retryPolicy shouldBe policy
         }
@@ -46,9 +46,9 @@ class PipelineOperatorsTest :
             val def =
                 pipeline("type-capture-test", maxInFlight = 10) {
                     source("src", fakeAdapter())
-                    step<String, Int, ItemFailure>("to-int") { it.length }
+                    step<String, Int>("to-int") { it.length }
                 }.shouldBeRight()
-            val stepOp = def.operators.filterIsInstance<StepDef<*, *, *>>().first()
+            val stepOp = def.operators.filterIsInstance<StepDef<*, *>>().first()
             stepOp.inputType shouldBe typeOf<String>()
             stepOp.outputType shouldBe typeOf<Int>()
         }
@@ -57,9 +57,9 @@ class PipelineOperatorsTest :
             val def =
                 pipeline("filter-test", maxInFlight = 10) {
                     source("src", fakeAdapter())
-                    filter<ItemFailure>("dedup", filteredReason = FilteredReason.DUPLICATE) { true }
+                    filter<String>("dedup", filteredReason = FilteredReason.DUPLICATE) { true }
                 }.shouldBeRight()
-            val filterOp = def.operators.filterIsInstance<FilterDef<*, *>>().first()
+            val filterOp = def.operators.filterIsInstance<FilterDef<*>>().first()
             filterOp.filteredReason shouldBe FilteredReason.DUPLICATE
         }
 
@@ -67,9 +67,9 @@ class PipelineOperatorsTest :
             val def =
                 pipeline("filter-default", maxInFlight = 10) {
                     source("src", fakeAdapter())
-                    filter<ItemFailure>("default-filter") { true }
+                    filter<String>("default-filter") { true }
                 }.shouldBeRight()
-            val filterOp = def.operators.filterIsInstance<FilterDef<*, *>>().first()
+            val filterOp = def.operators.filterIsInstance<FilterDef<*>>().first()
             filterOp.filteredReason shouldBe FilteredReason.BELOW_THRESHOLD
         }
 
@@ -77,9 +77,9 @@ class PipelineOperatorsTest :
             val def =
                 pipeline("filter-type-test", maxInFlight = 10) {
                     source("src", fakeAdapter())
-                    filter<ItemFailure>("f") { it.isNotEmpty() }
+                    filter<String>("f") { it.isNotEmpty() }
                 }.shouldBeRight()
-            val filterOp = def.operators.filterIsInstance<FilterDef<*, *>>().first()
+            val filterOp = def.operators.filterIsInstance<FilterDef<*>>().first()
             filterOp.inputType shouldBe typeOf<String>()
         }
 
@@ -87,7 +87,7 @@ class PipelineOperatorsTest :
             val def =
                 pipeline("persist-test", maxInFlight = 10) {
                     source("src", fakeAdapter())
-                    step<String, String, ItemFailure>("step1") { it }
+                    step<String, String>("step1") { it }
                     persistEach("checkpoint-1")
                 }.shouldBeRight()
             val persistOp = def.operators.filterIsInstance<PersistEachDef>().first()
@@ -98,10 +98,10 @@ class PipelineOperatorsTest :
             val def =
                 pipeline("order-test", maxInFlight = 10) {
                     source("src", fakeAdapter())
-                    filter<ItemFailure>("a") { true }
-                    step<String, String, ItemFailure>("b") { it }
+                    filter<String>("a") { true }
+                    step<String, String>("b") { it }
                     persistEach("c")
-                    step<String, String, ItemFailure>("d") { it }
+                    step<String, String>("d") { it }
                 }.shouldBeRight()
             def.operators.map { it.name } shouldBe listOf("a", "b", "c", "d")
         }
@@ -111,7 +111,7 @@ class PipelineOperatorsTest :
             val def =
                 pipeline("src-test", maxInFlight = 10) {
                     source("my-source", adapter)
-                    step<String, String, ItemFailure>("step1") { it }
+                    step<String, String>("step1") { it }
                 }.shouldBeRight()
             def.source.name shouldBe "my-source"
             def.source.adapter shouldBe adapter
@@ -121,10 +121,10 @@ class PipelineOperatorsTest :
             val def =
                 pipeline("full-pipeline", maxInFlight = 50) {
                     source("src", fakeAdapter())
-                    filter<ItemFailure>("filter1") { it.isNotEmpty() }
-                    step<String, String, ItemFailure>("enrich") { it.uppercase() }
+                    filter<String>("filter1") { it.isNotEmpty() }
+                    step<String, String>("enrich") { it.uppercase() }
                     persistEach("checkpoint")
-                    step<String, String, ItemFailure>("publish") { it }
+                    step<String, String>("publish") { it }
                 }.shouldBeRight()
             def.operators.size shouldBe 4
         }

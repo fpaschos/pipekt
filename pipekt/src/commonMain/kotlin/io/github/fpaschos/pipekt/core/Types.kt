@@ -35,17 +35,23 @@ data class StepCtx(
 // ── Step function typealias ───────────────────────────────────────────────────
 
 /**
- * Step function contract: a suspend function that runs in a [Raise] context for error type [E],
+ * Step function contract: a suspend function that runs in a [Raise] context for [ItemFailure],
  * receives [StepCtx] and input [I], and returns [O].
  *
- * Steps can raise [E] for business or retryable errors; the runtime uses this for checkpointing
- * and retry policy. Implementations must be multiplatform-safe and should avoid blocking.
+ * The error channel is fixed to [ItemFailure] — there is no generic error type parameter.
+ * [ItemFailure] is an open interface; steps raise any value that implements it, including
+ * custom domain types (e.g. `raise(GatewayTimeout(503))`). The [Raise]<[ItemFailure]> context
+ * accepts subtypes, so no wrapping is needed for the common case.
+ *
+ * For callers who need to map typed domain errors to a specific [ItemFailure] subtype before the
+ * runtime routes them, Arrow's `withError` can be used at the step boundary.
+ *
+ * Implementations must be multiplatform-safe and should avoid blocking.
  *
  * @param I Input type for this step (payload or previous step output).
  * @param O Output type (passed to the next operator or terminal).
- * @param E Error type that can be raised (e.g. [ItemFailure] or a domain type).
  */
-typealias StepFn<I, O, E> = suspend context(Raise<E>, StepCtx)
+typealias StepFn<I, O> = suspend context(Raise<ItemFailure>, StepCtx)
 (I) -> O
 
 // ── Source / Ingress records ──────────────────────────────────────────────────

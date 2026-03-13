@@ -13,13 +13,17 @@ import io.kotest.matchers.types.shouldBeInstanceOf
 /**
  * Tests for step function error ergonomics using the Arrow [Raise] DSL with [CoreFailure] and [ItemFailure].
  *
+ * The error channel is fixed to [ItemFailure] — [StepFn] has no generic error type parameter.
+ * Steps raise any [ItemFailure] subtype directly; the runtime routes on [ItemFailure.isRetryable]
+ * and [ItemFailure.isFiltered].
+ *
  * **Contract and behavior coverage:**
  * - [CoreFailure.Fatal]: raised step is captured as Left; [ItemFailure.isRetryable] is false,
  *   [ItemFailure.isFiltered] is false.
  * - [CoreFailure.Retryable]: [ItemFailure.isRetryable] returns true.
  * - [CoreFailure.Filtered]: [ItemFailure.isFiltered] returns true; message is the reason name.
  * - [CoreFailure.InfrastructureFailure]: treated as fatal by default (neither retryable nor filtered).
- * - User domain error implementing [ItemFailure] with custom routing works via the interface.
+ * - User domain error implementing [ItemFailure] can be raised and recovered via [ItemFailure] interface.
  * - Step that does not raise returns Right(output).
  * - [withError] can map domain errors to [CoreFailure] for uniform runtime handling.
  *
@@ -42,14 +46,14 @@ class StepRaiseDslTest :
             )
 
         test("step that does not raise returns Right(output)") {
-            val fn: StepFn<String, String, CoreFailure> = { input -> input.uppercase() }
-            val result: Either<CoreFailure, String> = either { with(ctx) { fn("hello") } }
+            val fn: StepFn<String, String> = { input -> input.uppercase() }
+            val result: Either<ItemFailure, String> = either { with(ctx) { fn("hello") } }
             result.shouldBeRight() shouldBe "HELLO"
         }
 
         test("step raising CoreFailure.Fatal is captured as Left") {
-            val fn: StepFn<String, String, CoreFailure> = { _ -> raise(CoreFailure.Fatal("bad input")) }
-            val result: Either<CoreFailure, String> = either { with(ctx) { fn("x") } }
+            val fn: StepFn<String, String> = { _ -> raise(CoreFailure.Fatal("bad input")) }
+            val result: Either<ItemFailure, String> = either { with(ctx) { fn("x") } }
             val failure = result.shouldBeLeft()
             failure.shouldBeInstanceOf<CoreFailure.Fatal>()
             failure.message shouldBe "bad input"
@@ -58,8 +62,8 @@ class StepRaiseDslTest :
         }
 
         test("CoreFailure.Retryable has isRetryable true") {
-            val fn: StepFn<String, String, CoreFailure> = { _ -> raise(CoreFailure.Retryable("timeout", attempt = 1)) }
-            val result: Either<CoreFailure, String> = either { with(ctx) { fn("x") } }
+            val fn: StepFn<String, String> = { _ -> raise(CoreFailure.Retryable("timeout", attempt = 1)) }
+            val result: Either<ItemFailure, String> = either { with(ctx) { fn("x") } }
             val failure = result.shouldBeLeft()
             failure.shouldBeInstanceOf<CoreFailure.Retryable>()
             failure.isRetryable() shouldBe true
@@ -67,8 +71,8 @@ class StepRaiseDslTest :
         }
 
         test("CoreFailure.Filtered has isFiltered true and message equals reason name") {
-            val fn: StepFn<String, String, CoreFailure> = { _ -> raise(CoreFailure.Filtered(FilteredReason.DUPLICATE)) }
-            val result: Either<CoreFailure, String> = either { with(ctx) { fn("x") } }
+            val fn: StepFn<String, String> = { _ -> raise(CoreFailure.Filtered(FilteredReason.DUPLICATE)) }
+            val result: Either<ItemFailure, String> = either { with(ctx) { fn("x") } }
             val failure = result.shouldBeLeft()
             failure.shouldBeInstanceOf<CoreFailure.Filtered>()
             failure.isFiltered() shouldBe true
@@ -83,7 +87,7 @@ class StepRaiseDslTest :
             failure.message shouldBe "db timeout"
         }
 
-        test("user domain error implementing ItemFailure with isRetryable routes correctly") {
+        test("user domain error implementing ItemFailure is raised and accessible via ItemFailure interface") {
             data class GatewayTimeout(
                 val code: Int,
             ) : ItemFailure {
@@ -92,25 +96,26 @@ class StepRaiseDslTest :
                 override fun isRetryable() = true
             }
 
-            val fn: StepFn<String, String, GatewayTimeout> = { _ -> raise(GatewayTimeout(503)) }
-            val result: Either<GatewayTimeout, String> = either { with(ctx) { fn("x") } }
+            val fn: StepFn<String, String> = { _ -> raise(GatewayTimeout(503)) }
+            val result: Either<ItemFailure, String> = either { with(ctx) { fn("x") } }
             val failure = result.shouldBeLeft()
+            failure.shouldBeInstanceOf<GatewayTimeout>()
             failure.isRetryable() shouldBe true
             failure.isFiltered() shouldBe false
             failure.code shouldBe 503
         }
 
-        test("withError maps domain error to CoreFailure for uniform runtime handling") {
+        test("withError maps domain ItemFailure to CoreFailure for uniform runtime handling") {
             data class PaymentDeclined(
                 val reason: String,
             ) : ItemFailure {
                 override val message = "declined: $reason"
             }
 
-            val fn: StepFn<String, String, PaymentDeclined> = { _ -> raise(PaymentDeclined("insufficient funds")) }
-            val result: Either<CoreFailure, String> =
+            val fn: StepFn<String, String> = { _ -> raise(PaymentDeclined("insufficient funds")) }
+            val result: Either<ItemFailure, String> =
                 either {
-                    withError({ e: PaymentDeclined -> CoreFailure.Fatal(e.message) }) {
+                    withError({ e: ItemFailure -> CoreFailure.Fatal(e.message) }) {
                         with(ctx) { fn("x") }
                     }
                 }

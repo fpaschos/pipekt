@@ -120,7 +120,7 @@ fun validate(
         var currentType = sourceType
         for (op in operators) {
             when (op) {
-                is StepDef<*, *, *> -> {
+                is StepDef<*, *> -> {
                     if (op.inputType != currentType) {
                         errors +=
                             PipelineValidationError.TypeMismatch(
@@ -131,7 +131,7 @@ fun validate(
                     }
                     currentType = op.outputType
                 }
-                is FilterDef<*, *> -> {
+                is FilterDef<*> -> {
                     if (op.inputType != currentType) {
                         errors +=
                             PipelineValidationError.TypeMismatch(
@@ -207,7 +207,9 @@ class PipelineBuilder<T>(
     /**
      * Appends a transform step.
      *
-     * [I] and [O] are captured as reified types at the call site; [E] must implement [ItemFailure].
+     * [I] and [O] are captured as reified types at the call site. The error channel is fixed to
+     * [ItemFailure] — no error type parameter is required. Steps raise any [ItemFailure] subtype
+     * directly via the [Raise]<[ItemFailure]> context receiver.
      * The step's input type is validated against the preceding operator's output type at [build] time.
      *
      * @param name Unique step name.
@@ -215,17 +217,17 @@ class PipelineBuilder<T>(
      * @param fn The step function.
      * @return this builder for chaining.
      */
-    inline fun <reified I, reified O, reified E : ItemFailure> step(
+    inline fun <reified I, reified O> step(
         name: String,
         retryPolicy: RetryPolicy = RetryPolicy(maxAttempts = 1),
-        noinline fn: StepFn<I, O, E>,
+        noinline fn: StepFn<I, O>,
     ): PipelineBuilder<T> {
         @Suppress("UNCHECKED_CAST")
         operators +=
             StepDef(
                 name = name,
                 retryPolicy = retryPolicy,
-                fn = fn as StepFn<Any?, Any?, Any?>,
+                fn = fn as StepFn<Any?, Any?>,
                 inputType = typeOf<I>(),
                 outputType = typeOf<O>(),
             )
@@ -236,26 +238,27 @@ class PipelineBuilder<T>(
     /**
      * Appends a filter step; items for which [predicate] returns false are filtered out.
      *
-     * [T] flows through unchanged — filter output type equals input type. [E] must implement [ItemFailure].
-     * The filter's input type is validated against the preceding operator's output type at [build] time.
+     * [I] is the input type flowing into the filter; it must match the output type of the
+     * preceding operator (validated at [build] time). Filter output type equals input type —
+     * items pass through unchanged when kept. The error channel is fixed to [ItemFailure].
      *
      * @param name Unique step name.
      * @param filteredReason Reason when filtered; default [FilteredReason.BELOW_THRESHOLD].
      * @param predicate Returns true to keep, false to filter.
      * @return this builder for chaining.
      */
-    inline fun <reified E : ItemFailure> filter(
+    inline fun <reified I> filter(
         name: String,
         filteredReason: FilteredReason = FilteredReason.BELOW_THRESHOLD,
-        noinline predicate: StepFn<T, Boolean, E>,
+        noinline predicate: StepFn<I, Boolean>,
     ): PipelineBuilder<T> {
         @Suppress("UNCHECKED_CAST")
         operators +=
             FilterDef(
                 name = name,
                 filteredReason = filteredReason,
-                predicate = predicate as StepFn<Any?, Boolean, Any?>,
-                inputType = sourceType,
+                predicate = predicate as StepFn<Any?, Boolean>,
+                inputType = typeOf<I>(),
             )
         // filter is transparent — currentOutputType unchanged
         return this
