@@ -1,11 +1,22 @@
 ---
 name: pkt-tests
-description: Testing standards for pipekt: create and validate tests for behavior and contracts, aligned with plans and requested feature. Use when adding or changing pipeline/operator tests, fixing bugs, or checking test usefulness and coverage in pipekt.
+description: Testing standards for pipekt: create and validate Kotest tests for behavior and contracts, aligned with plans and requested feature. Use when adding or changing pipeline/operator tests, fixing bugs, or checking test usefulness and coverage in pipekt.
 ---
 
 # pkt-tests
 
 Use this skill for **creation** and **validation** of tests. Align tests with `plans/` and the requested feature; keep them small and elegant; follow the interactive approve-then-implement flow.
+
+## Framework: Kotest only
+
+- **Only Kotest tests are acceptable.** Do not introduce or use JUnit, Kotlin Test, or other test frameworks in pipekt. Use `io.kotest` (FunSpec, should-matchers, etc.) and the project’s existing Kotest setup.
+- **Rely on Kotest best practices** for structure, assertions, and style (spec styles, matchers, inspectors, etc.).
+
+## Test names: readable, behavior-focused
+
+- Use **readable, sentence-style test names** that describe the scenario and expected outcome. Prefer names that read like a short sentence.
+- **Good:** `"pipeline with filter step and persistEach builds successfully"`, `"left is returned when step config is invalid"`.
+- **Bad:** `"runRecordHasRequiredFields"`, `"test1"`, `"works"`. Avoid camelCase “function names” or vague labels.
 
 ## When to use
 
@@ -56,13 +67,19 @@ Rules:
 ## Rules
 
 - Add tests that fail before the fix and pass after it.
-- Prefer behavior-focused test names that describe inputs and outputs.
+- Use readable, sentence-style test names (see **Test names** above).
 - Cover success and edge/error paths where relevant.
 - Keep tests deterministic; do not rely on timing-sensitive assertions.
 
 ## Documentation
 
+- Test code must be documented with **KDoc at the same level of detail and care as production code**.
 - Test classes must be **extensively documented** at class level. For each test class, add KDoc that describes the contract and behavior coverage (what the tests validate, which edge cases and success paths are covered). When adding or changing behavior coverage, add or update this class-level KDoc so the skill and reviewers can see scope at a glance.
+- Helper functions used inside tests (e.g. factory/builders, common assertions) should also have KDoc explaining **intent and contracts**, not mechanics, just like in production code.
+
+### Arrow and Kotest assertions
+
+- **Arrow types (Option, Either, Validated):** Prefer fetching Arrow docs from **context7** (user-context7 MCP) when you need API or usage details. For Kotest matchers on Arrow types, use **https://kotest.io/docs/assertions/arrow.html** (e.g. `shouldBeSome`, `shouldBeNone`, `shouldBeRight`, `shouldBeLeft`, `shouldBeValid`, `shouldBeInvalid`). Always prefer Kotest Arrow matchers over manual unwrapping in tests.
 
 ## Minimum validation
 

@@ -4,11 +4,14 @@ import io.github.fpaschos.pipekt.core.IngressRecord
 import io.github.fpaschos.pipekt.core.WorkItemStatus
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
-import kotlinx.coroutines.runBlocking
 
 /**
- * Contract test: [DurableStore] interface is complete and callable.
- * A minimal stub implements every method; one test invokes each to verify the SPI shape.
+ * Contract coverage for the [DurableStore] SPI surface.
+ *
+ * This test uses a minimal in-memory stub implementing every method from the
+ * "Durable Store" contract in `plans/streams-contracts-v1.md`, and invokes
+ * each one once to verify that the interface is complete, callable, and
+ * returns values of the expected types without throwing.
  */
 class DurableStoreContractTest :
     FunSpec({

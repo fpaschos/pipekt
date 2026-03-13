@@ -6,13 +6,17 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldNotBeBlank
 
 /**
- * Contract: RunRecord carries run id, pipeline name, plan version, status, and timestamps.
- * See plans/streams-contracts-v1.md "RunRecord minimum fields".
+ * Contract coverage for [RunRecord] as a persistent entity.
+ *
+ * These tests validate the "RunRecord minimum fields" contract from
+ * `plans/streams-contracts-v1.md`: every record must carry a run id, pipeline
+ * name, plan version, status, and creation / update timestamps, and expose
+ * them as immutable value-type fields.
  */
 class RunRecordTest :
     FunSpec({
 
-        test("runRecordHasRequiredFields") {
+        test("run record exposes minimum required fields") {
             val r =
                 RunRecord(
                     id = "run-1",

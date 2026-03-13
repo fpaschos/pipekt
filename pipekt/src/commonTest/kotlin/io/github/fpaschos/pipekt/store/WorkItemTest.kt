@@ -5,14 +5,18 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 
 /**
- * Contract: WorkItem carries all required fields per streams-contracts-v1 (id, runId, sourceId,
- * currentStep, status, payloadJson, lastErrorJson, attemptCount, leaseOwner, leaseExpiryMs,
- * retryAtMs, createdAtMs, updatedAtMs).
+ * Contract coverage for [WorkItem] as a persistent entity.
+ *
+ * These tests validate the "WorkItem minimum fields" (and related fields)
+ * contract from `plans/streams-contracts-v1.md`: every work item must carry
+ * identity, run, step, status, payload and error metadata, lease information,
+ * retry timing, and creation / update timestamps, all exposed as immutable
+ * value-type fields.
  */
 class WorkItemTest :
     FunSpec({
 
-        test("workItemHasRequiredFields") {
+        test("work item exposes all required fields") {
             val w =
                 WorkItem(
                     id = "item-1",
