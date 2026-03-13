@@ -37,6 +37,7 @@ class PipelineOperatorsTest :
                     step<String, String>("with-retry", retryPolicy = policy) { it }
                 }.shouldBeRight()
             val stepOp = def.operators.filterIsInstance<StepDef<*, *, *>>().first()
+            stepOp.name shouldBe "with-retry"
             stepOp.retryPolicy shouldBe policy
         }
 

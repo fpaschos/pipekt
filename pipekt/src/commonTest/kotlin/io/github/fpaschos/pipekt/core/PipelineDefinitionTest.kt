@@ -121,6 +121,13 @@ class PipelineDefinitionTest :
             )
         }
 
+        test("maxInFlight of 1 is accepted") {
+            pipeline("min-flight", maxInFlight = 1) {
+                source("src", fakeAdapter())
+                step<String, String>("step1") { it }
+            }.shouldBeRight()
+        }
+
         test("negative maxInFlight returns InvalidMaxInFlight") {
             val errors =
                 validate(
