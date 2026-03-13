@@ -36,8 +36,8 @@ V1 supports only `INFINITE` pipelines:
 ### Step Function
 
 ```kotlin
-typealias StepFn<I, O, E> =
-  suspend context(arrow.core.raise.Raise<E>, StepCtx) (I) -> O
+typealias StepFn<I, O> =
+  suspend context(arrow.core.raise.Raise<ItemFailure>, StepCtx) (I) -> O
 ```
 
 Rules:
@@ -45,8 +45,12 @@ Rules:
 - `StepFn` must be `suspend` — step functions call suspending APIs (HTTP clients, DB access, `delay`)
 - `I` is the typed input payload for the current step
 - `O` is the typed output payload for the next step
-- `E` is the business error type raised by the step
-- runtime-owned failures such as lease loss, serialization failure, or store failure are not modeled as `E`
+- The error channel is fixed to `ItemFailure` — it is not a generic type parameter
+- `ItemFailure` is an open interface; callers implement it with domain types and raise them via `Raise<ItemFailure>` (subtype accepted by the context receiver)
+- Arrow's `withError` can map typed domain errors to `ItemFailure` at a step boundary for callers who need typed routing before the runtime sees the error
+- A generic `E` type parameter cannot be inferred from context receivers in Kotlin — callers would always have to annotate it explicitly; fixing to `ItemFailure` removes this annotation burden while preserving full extensibility via implementation
+- This follows the same pattern as ktkit's `ErrorSpec`: one fixed error channel owned by the framework, extended by callers via interface implementation
+- runtime-owned failures such as lease loss, serialization failure, or store failure are not modeled via `Raise<ItemFailure>` — they are handled outside step functions
 
 ### Step Context
 

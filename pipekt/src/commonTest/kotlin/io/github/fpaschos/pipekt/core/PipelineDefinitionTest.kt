@@ -5,7 +5,20 @@ import io.kotest.assertions.arrow.core.shouldBeRight
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
+import kotlin.reflect.typeOf
 
+/**
+ * Tests for [PipelineDefinition] validation and the [pipeline] DSL builder.
+ *
+ * **Contract and behavior coverage:**
+ * - Valid pipeline builds (name, maxInFlight, source + step).
+ * - [PipelineDefinition.retentionDays]: default 30 and override.
+ * - Validation errors: duplicate step names (including source/step name clash), no source defined,
+ *   empty operators, invalid or negative maxInFlight; multiple errors reported together.
+ * - DSL builder: source, step, filter, persistEach; build() returns Either consistent with [validate].
+ * - Type-chain validation: [PipelineValidationError.TypeMismatch] for step/filter input type mismatches;
+ *   [PersistEachDef] is transparent; valid same-type chains pass.
+ */
 class PipelineDefinitionTest :
     FunSpec({
 
@@ -76,6 +89,7 @@ class PipelineDefinitionTest :
                 validate(
                     name = "no-source",
                     source = null,
+                    sourceType = typeOf<String>(),
                     operators = listOf(PersistEachDef("step1")),
                     maxInFlight = 10,
                 ).shouldBeLeft()
@@ -90,6 +104,7 @@ class PipelineDefinitionTest :
                 validate(
                     name = "empty",
                     source = sourceDef,
+                    sourceType = typeOf<String>(),
                     operators = emptyList(),
                     maxInFlight = 10,
                 ).shouldBeLeft()
@@ -103,6 +118,7 @@ class PipelineDefinitionTest :
                 validate(
                     name = "bad-flight",
                     source = SourceDef("src", fakeAdapter()),
+                    sourceType = typeOf<String>(),
                     operators = listOf(PersistEachDef("step1")),
                     maxInFlight = 0,
                 ).shouldBeLeft()
@@ -111,11 +127,19 @@ class PipelineDefinitionTest :
             )
         }
 
+        test("maxInFlight of 1 is accepted") {
+            pipeline("min-flight", maxInFlight = 1) {
+                source("src", fakeAdapter())
+                step<String, String>("step1") { it }
+            }.shouldBeRight()
+        }
+
         test("negative maxInFlight returns InvalidMaxInFlight") {
             val errors =
                 validate(
                     name = "bad-flight",
                     source = SourceDef("src", fakeAdapter()),
+                    sourceType = typeOf<String>(),
                     operators = listOf(PersistEachDef("step1")),
                     maxInFlight = -5,
                 ).shouldBeLeft()
@@ -129,6 +153,7 @@ class PipelineDefinitionTest :
                 validate(
                     name = "multi-error",
                     source = null,
+                    sourceType = typeOf<String>(),
                     operators = emptyList(),
                     maxInFlight = 0,
                 ).shouldBeLeft()
@@ -141,5 +166,62 @@ class PipelineDefinitionTest :
             errors.filterIsInstance<PipelineValidationError.InvalidMaxInFlight>().shouldContainExactlyInAnyOrder(
                 PipelineValidationError.InvalidMaxInFlight,
             )
+        }
+
+        // ── Type-chain validation ──────────────────────────────────────────────
+
+        test("valid String-to-String type chain passes validation") {
+            pipeline("chain-valid", maxInFlight = 10) {
+                source("src", fakeAdapter())
+                step<String, String>("step1") { it }
+                step<String, String>("step2") { it.uppercase() }
+            }.shouldBeRight()
+        }
+
+        test("type mismatch between adjacent steps is rejected") {
+            val errors =
+                pipeline("chain-mismatch", maxInFlight = 10) {
+                    source("src", fakeAdapter())
+                    step<String, Int>("to-int") { it.length }
+                    step<String, String>("expects-string") { it }
+                }.shouldBeLeft()
+            val mismatch = errors.filterIsInstance<PipelineValidationError.TypeMismatch>().first()
+            mismatch.stepName shouldBe "expects-string"
+            mismatch.expected shouldBe typeOf<String>()
+            mismatch.actual shouldBe typeOf<Int>()
+        }
+
+        test("PersistEachDef is transparent in the type chain") {
+            pipeline("chain-persist", maxInFlight = 10) {
+                source("src", fakeAdapter())
+                step<String, String>("step1") { it }
+                persistEach("checkpoint")
+                step<String, String>("step2") { it }
+            }.shouldBeRight()
+        }
+
+        test("filter with matching input type passes type-chain validation") {
+            pipeline("chain-filter-valid", maxInFlight = 10) {
+                source("src", fakeAdapter())
+                filter<String>("keep-nonempty") { it.isNotEmpty() }
+                step<String, String>("step1") { it }
+            }.shouldBeRight()
+        }
+
+        test("multiple independent type mismatches are all reported") {
+            // to-int: String -> Int (ok, matches source String)
+            // wrong-int-1: Int -> String (ok, matches Int output of to-int)
+            // wrong-string: Int -> Int mismatches: declared input Int but currentOutput is String
+            // Use two separate mismatch points: String->Int->String->Int chain where
+            // steps 2 and 4 expect Int but receive String output from prior steps.
+            val errors =
+                pipeline("chain-multi-mismatch", maxInFlight = 10) {
+                    source("src", fakeAdapter())
+                    step<String, Int>("to-int") { it.length }
+                    step<String, String>("mismatch-1") { it }
+                    step<Int, String>("mismatch-2") { it.toString() }
+                }.shouldBeLeft()
+            val mismatches = errors.filterIsInstance<PipelineValidationError.TypeMismatch>()
+            mismatches.map { it.stepName }.shouldContainExactlyInAnyOrder("mismatch-1", "mismatch-2")
         }
     })
