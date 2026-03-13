@@ -1,5 +1,6 @@
 package io.github.fpaschos.pipekt.core
 
+import io.kotest.assertions.arrow.core.shouldBeRight
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 
@@ -20,108 +21,78 @@ class PipelineOperatorsTest :
 
         test("StepDef retryPolicy is preserved") {
             val policy = RetryPolicy(maxAttempts = 3, backoffMs = 500L)
-            val result =
+            val def =
                 pipeline("retry-test", maxInFlight = 10) {
                     source("src", fakeAdapter())
                     step<String, String>("with-retry", retryPolicy = policy) { it }
-                }
-            result.isRight() shouldBe true
-            val stepOp =
-                result
-                    .getOrNull()!!
-                    .operators
-                    .filterIsInstance<StepDef<*, *, *>>()
-                    .first()
+                }.shouldBeRight()
+            val stepOp = def.operators.filterIsInstance<StepDef<*, *, *>>().first()
             stepOp.retryPolicy shouldBe policy
         }
 
         test("FilterDef filteredReason is preserved") {
-            val result =
+            val def =
                 pipeline("filter-test", maxInFlight = 10) {
                     source("src", fakeAdapter())
                     filter<Nothing>("dedup", filteredReason = FilteredReason.DUPLICATE) { true }
-                }
-            result.isRight() shouldBe true
-            val filterOp =
-                result
-                    .getOrNull()!!
-                    .operators
-                    .filterIsInstance<FilterDef<*, *>>()
-                    .first()
+                }.shouldBeRight()
+            val filterOp = def.operators.filterIsInstance<FilterDef<*, *>>().first()
             filterOp.filteredReason shouldBe FilteredReason.DUPLICATE
         }
 
         test("FilterDef filteredReason defaults to BELOW_THRESHOLD") {
-            val result =
+            val def =
                 pipeline("filter-default", maxInFlight = 10) {
                     source("src", fakeAdapter())
                     filter<Nothing>("default-filter") { true }
-                }
-            result.isRight() shouldBe true
-            val filterOp =
-                result
-                    .getOrNull()!!
-                    .operators
-                    .filterIsInstance<FilterDef<*, *>>()
-                    .first()
+                }.shouldBeRight()
+            val filterOp = def.operators.filterIsInstance<FilterDef<*, *>>().first()
             filterOp.filteredReason shouldBe FilteredReason.BELOW_THRESHOLD
         }
 
         test("PersistEachDef name is preserved") {
-            val result =
+            val def =
                 pipeline("persist-test", maxInFlight = 10) {
                     source("src", fakeAdapter())
                     step<String, String>("step1") { it }
                     persistEach("checkpoint-1")
-                }
-            result.isRight() shouldBe true
-            val persistOp =
-                result
-                    .getOrNull()!!
-                    .operators
-                    .filterIsInstance<PersistEachDef>()
-                    .first()
+                }.shouldBeRight()
+            val persistOp = def.operators.filterIsInstance<PersistEachDef>().first()
             persistOp.name shouldBe "checkpoint-1"
         }
 
         test("operator list order is retained") {
-            val result =
+            val def =
                 pipeline("order-test", maxInFlight = 10) {
                     source("src", fakeAdapter())
                     filter<Nothing>("a") { true }
                     step<String, String>("b") { it }
                     persistEach("c")
                     step<String, String>("d") { it }
-                }
-            result.isRight() shouldBe true
-            val ops = result.getOrNull()!!.operators
-            ops.map { it.name } shouldBe listOf("a", "b", "c", "d")
+                }.shouldBeRight()
+            def.operators.map { it.name } shouldBe listOf("a", "b", "c", "d")
         }
 
         test("source definition is preserved in pipeline") {
             val adapter = fakeAdapter()
-            val result =
+            val def =
                 pipeline("src-test", maxInFlight = 10) {
                     source("my-source", adapter)
                     step<String, String>("step1") { it }
-                }
-            result.isRight() shouldBe true
-            val def = result.getOrNull()!!
+                }.shouldBeRight()
             def.source.name shouldBe "my-source"
             def.source.adapter shouldBe adapter
         }
 
         test("pipeline with filter step and persistEach builds successfully") {
-            val result =
+            val def =
                 pipeline("full-pipeline", maxInFlight = 50) {
                     source("src", fakeAdapter())
                     filter<Nothing>("filter1") { it.isNotEmpty() }
                     step<String, String>("enrich") { it.uppercase() }
                     persistEach("checkpoint")
                     step<String, String>("publish") { it }
-                }
-            result.isRight() shouldBe true
-            val ops = result.getOrNull()!!.operators
-            ops.size shouldBe 4
+                }.shouldBeRight()
+            def.operators.size shouldBe 4
         }
     })
