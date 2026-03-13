@@ -45,10 +45,11 @@ fun validate(
     if (source == null) errors += PipelineValidationError.NoSourceDefined
     if (operators.isEmpty()) errors += PipelineValidationError.EmptyPipeline
 
-    val allNames = buildList {
-        source?.let { add(it.name) }
-        addAll(operators.map { it.name })
-    }
+    val allNames =
+        buildList {
+            source?.let { add(it.name) }
+            addAll(operators.map { it.name })
+        }
 
     val duplicates = allNames.groupBy { it }.filter { it.value.size > 1 }.keys
     duplicates.forEach { errors += PipelineValidationError.DuplicateStepName(it) }
@@ -61,10 +62,11 @@ fun validate(
     val stepNames = operators.map { it.name }.toSet()
     operators.filterIsInstance<BarrierDef>().forEach { barrier ->
         if (barrier.predecessorStep !in stepNames) {
-            errors += PipelineValidationError.BarrierWithNoFinitePredecessor(
-                barrierName = barrier.name,
-                predecessorStep = barrier.predecessorStep,
-            )
+            errors +=
+                PipelineValidationError.BarrierWithNoFinitePredecessor(
+                    barrierName = barrier.name,
+                    predecessorStep = barrier.predecessorStep,
+                )
         }
     }
 
@@ -111,7 +113,7 @@ class PipelineBuilder<T>(
             FilterDef(
                 name = name,
                 filteredReason = filteredReason,
-                predicate = predicate as StepFn<Any?, Boolean, Any?>
+                predicate = predicate as StepFn<Any?, Boolean, Any?>,
             )
         return this
     }
@@ -138,8 +140,7 @@ class PipelineBuilder<T>(
         return this
     }
 
-    fun build(): Either<List<PipelineValidationError>, PipelineDefinition> =
-        validate(name = name, source = source, operators = operators)
+    fun build(): Either<List<PipelineValidationError>, PipelineDefinition> = validate(name = name, source = source, operators = operators)
 }
 
 fun <T> pipeline(

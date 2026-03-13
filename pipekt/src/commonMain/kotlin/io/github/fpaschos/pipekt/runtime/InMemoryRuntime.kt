@@ -139,9 +139,10 @@ class InMemoryRuntime(
                 val ctx = StepCtx(runId = runId, stepName = op.name, attemptNumber = attempt)
                 val startMs = clock.nowMs()
 
-                val result: Either<Any?, Any?> = either<Any?, Any?> {
-                    with(ctx) { step.fn(payload) }
-                }
+                val result: Either<Any?, Any?> =
+                    either<Any?, Any?> {
+                        with(ctx) { step.fn(payload) }
+                    }
 
                 val finishMs = clock.nowMs()
                 val isFinal = attempt >= step.retryPolicy.maxAttempts
@@ -159,7 +160,7 @@ class InMemoryRuntime(
                                 failure = null,
                                 startedAtMs = startMs,
                                 finishedAtMs = finishMs,
-                            )
+                            ),
                         )
                         val outJson = serializer.serialize(result.getOrNull())
                         store.checkpointItem(
@@ -173,11 +174,12 @@ class InMemoryRuntime(
                     }
                     else -> {
                         val errorMsg = result.leftOrNull()?.toString() ?: "unknown"
-                        val failure = if (isFinal) {
-                            ItemFailure.Fatal(errorMsg)
-                        } else {
-                            ItemFailure.Retryable(cause = errorMsg, attemptNumber = attempt)
-                        }
+                        val failure =
+                            if (isFinal) {
+                                ItemFailure.Fatal(errorMsg)
+                            } else {
+                                ItemFailure.Retryable(cause = errorMsg, attemptNumber = attempt)
+                            }
                         store.recordAttempt(
                             AttemptRecord(
                                 id = Uuid.random().toString(),
@@ -185,15 +187,16 @@ class InMemoryRuntime(
                                 runId = runId,
                                 stepName = op.name,
                                 attemptNumber = attempt,
-                                outcome = if (isFinal) {
-                                    AttemptOutcome.FATAL_FAILURE
-                                } else {
-                                    AttemptOutcome.RETRYABLE_FAILURE
-                                },
+                                outcome =
+                                    if (isFinal) {
+                                        AttemptOutcome.FATAL_FAILURE
+                                    } else {
+                                        AttemptOutcome.RETRYABLE_FAILURE
+                                    },
                                 failure = failure,
                                 startedAtMs = startMs,
                                 finishedAtMs = finishMs,
-                            )
+                            ),
                         )
                         if (isFinal) {
                             store.failItem(item.id, op.name, failure, clock.nowMs())
@@ -218,9 +221,10 @@ class InMemoryRuntime(
             val ctx = StepCtx(runId = runId, stepName = op.name, attemptNumber = 1)
             val startMs = clock.nowMs()
 
-            val result: Either<Any?, Boolean> = either<Any?, Boolean> {
-                with(ctx) { filter.predicate(payload) }
-            }
+            val result: Either<Any?, Boolean> =
+                either<Any?, Boolean> {
+                    with(ctx) { filter.predicate(payload) }
+                }
 
             val finishMs = clock.nowMs()
 
@@ -238,7 +242,7 @@ class InMemoryRuntime(
                             failure = failure,
                             startedAtMs = startMs,
                             finishedAtMs = finishMs,
-                        )
+                        ),
                     )
                     store.failItem(item.id, op.name, failure, clock.nowMs())
                 }
@@ -254,7 +258,7 @@ class InMemoryRuntime(
                             failure = null,
                             startedAtMs = startMs,
                             finishedAtMs = finishMs,
-                        )
+                        ),
                     )
                     store.checkpointItem(
                         workItemId = item.id,
@@ -277,7 +281,7 @@ class InMemoryRuntime(
                             failure = failure,
                             startedAtMs = startMs,
                             finishedAtMs = finishMs,
-                        )
+                        ),
                     )
                     store.checkpointItem(
                         workItemId = item.id,
@@ -314,9 +318,10 @@ class InMemoryRuntime(
         op: FinalizerDef<Any?, Any?>,
     ) {
         val allItems = store.getItemsForStep(runId, op.name)
-        val payloads = allItems
-            .filter { it.status == WorkItemStatus.COMPLETED || it.status == WorkItemStatus.PENDING }
-            .map { serializer.deserialize(it.payloadJson) }
+        val payloads =
+            allItems
+                .filter { it.status == WorkItemStatus.COMPLETED || it.status == WorkItemStatus.PENDING }
+                .map { serializer.deserialize(it.payloadJson) }
 
         val ctx = StepCtx(runId = runId, stepName = op.name, attemptNumber = 1)
 

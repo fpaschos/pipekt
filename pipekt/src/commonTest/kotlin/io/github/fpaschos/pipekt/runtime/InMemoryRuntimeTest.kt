@@ -38,10 +38,11 @@ class InMemoryRuntimeTest :
         test("happy path: records pass through a step and run is finalized") {
             val store = InMemoryStore()
             val adapter = FakeSourceAdapter<String>()
-            val pipelineDef = pipeline<String>("happy-path") {
-                source("src", adapter)
-                step<String, String>("upper") { it.uppercase() }
-            }.getOrNull()!!
+            val pipelineDef =
+                pipeline<String>("happy-path") {
+                    source("src", adapter)
+                    step<String, String>("upper") { it.uppercase() }
+                }.getOrNull()!!
 
             val runtime = InMemoryRuntime(pipelineDef, store, fakeClock())
             val run = runtime.startRun(ingressOf("hello", "world"))
@@ -57,10 +58,11 @@ class InMemoryRuntimeTest :
         test("happy path: run status is FINALIZED after all items complete") {
             val store = InMemoryStore()
             val adapter = FakeSourceAdapter<String>()
-            val pipelineDef = pipeline<String>("finalize-test") {
-                source("src", adapter)
-                step<String, String>("noop") { it }
-            }.getOrNull()!!
+            val pipelineDef =
+                pipeline<String>("finalize-test") {
+                    source("src", adapter)
+                    step<String, String>("noop") { it }
+                }.getOrNull()!!
 
             val runtime = InMemoryRuntime(pipelineDef, store, fakeClock())
             val run = runtime.startRun(ingressOf("a"))
@@ -74,12 +76,13 @@ class InMemoryRuntimeTest :
         test("filter: items not passing predicate are marked FILTERED") {
             val store = InMemoryStore()
             val adapter = FakeSourceAdapter<String>()
-            val pipelineDef = pipeline<String>("filter-test") {
-                source("src", adapter)
-                filter<Nothing>("drop-short", filteredReason = FilteredReason.BELOW_THRESHOLD) {
-                    it.length > 3
-                }
-            }.getOrNull()!!
+            val pipelineDef =
+                pipeline<String>("filter-test") {
+                    source("src", adapter)
+                    filter<Nothing>("drop-short", filteredReason = FilteredReason.BELOW_THRESHOLD) {
+                        it.length > 3
+                    }
+                }.getOrNull()!!
 
             val runtime = InMemoryRuntime(pipelineDef, store, fakeClock())
             runtime.startRun(ingressOf("hi", "hello"))
@@ -98,12 +101,13 @@ class InMemoryRuntimeTest :
         test("barrier: run transitions to AWAITING_BARRIER when predecessor items are pending") {
             val store = InMemoryStore()
             val adapter = FakeSourceAdapter<String>()
-            val pipelineDef = pipeline<String>("barrier-test") {
-                source("src", adapter)
-                step<String, String>("process") { it }
-                barrier("wait-all", predecessorStep = "process")
-                finalizer<String>("fin") { _ -> }
-            }.getOrNull()!!
+            val pipelineDef =
+                pipeline<String>("barrier-test") {
+                    source("src", adapter)
+                    step<String, String>("process") { it }
+                    barrier("wait-all", predecessorStep = "process")
+                    finalizer<String>("fin") { _ -> }
+                }.getOrNull()!!
 
             val run = store.createRun("barrier-test", 1000L)
 
@@ -114,12 +118,13 @@ class InMemoryRuntimeTest :
         test("barrier: run proceeds after all predecessor items reach terminal state") {
             val store = InMemoryStore()
             val adapter = FakeSourceAdapter<String>()
-            val pipelineDef = pipeline<String>("barrier-proceed") {
-                source("src", adapter)
-                step<String, String>("process") { it.uppercase() }
-                barrier("wait-all", predecessorStep = "process")
-                finalizer<String>("fin") { _ -> }
-            }.getOrNull()!!
+            val pipelineDef =
+                pipeline<String>("barrier-proceed") {
+                    source("src", adapter)
+                    step<String, String>("process") { it.uppercase() }
+                    barrier("wait-all", predecessorStep = "process")
+                    finalizer<String>("fin") { _ -> }
+                }.getOrNull()!!
 
             val runtime = InMemoryRuntime(pipelineDef, store, fakeClock())
             val run = runtime.startRun(ingressOf("x", "y"))
@@ -146,12 +151,13 @@ class InMemoryRuntimeTest :
             val adapter = FakeSourceAdapter<String>()
             var finalizerCallCount = 0
 
-            val pipelineDef = pipeline<String>("exactly-once") {
-                source("src", adapter)
-                step<String, String>("step1") { it }
-                barrier("b1", predecessorStep = "step1")
-                finalizer<String>("fin") { _ -> finalizerCallCount++ }
-            }.getOrNull()!!
+            val pipelineDef =
+                pipeline<String>("exactly-once") {
+                    source("src", adapter)
+                    step<String, String>("step1") { it }
+                    barrier("b1", predecessorStep = "step1")
+                    finalizer<String>("fin") { _ -> finalizerCallCount++ }
+                }.getOrNull()!!
 
             val runtime = InMemoryRuntime(pipelineDef, store, fakeClock())
             val run = runtime.startRun(ingressOf("item1"))
@@ -165,12 +171,13 @@ class InMemoryRuntimeTest :
         test("step with maxAttempts=1 marks item as FAILED on error") {
             val store = InMemoryStore()
             val adapter = FakeSourceAdapter<String>()
-            val pipelineDef = pipeline<String>("retry-test") {
-                source("src", adapter)
-                step<String, String>("fail-step", retryPolicy = RetryPolicy(maxAttempts = 1)) {
-                    raise("always fails")
-                }
-            }.getOrNull()!!
+            val pipelineDef =
+                pipeline<String>("retry-test") {
+                    source("src", adapter)
+                    step<String, String>("fail-step", retryPolicy = RetryPolicy(maxAttempts = 1)) {
+                        raise("always fails")
+                    }
+                }.getOrNull()!!
 
             val runtime = InMemoryRuntime(pipelineDef, store, fakeClock())
             runtime.startRun(ingressOf("item1"))
@@ -183,12 +190,13 @@ class InMemoryRuntimeTest :
         test("step with maxAttempts=3 records multiple attempt records before failing") {
             val store = InMemoryStore()
             val adapter = FakeSourceAdapter<String>()
-            val pipelineDef = pipeline<String>("multi-retry") {
-                source("src", adapter)
-                step<String, String>("retry-step", retryPolicy = RetryPolicy(maxAttempts = 3)) {
-                    raise("fail")
-                }
-            }.getOrNull()!!
+            val pipelineDef =
+                pipeline<String>("multi-retry") {
+                    source("src", adapter)
+                    step<String, String>("retry-step", retryPolicy = RetryPolicy(maxAttempts = 3)) {
+                        raise("fail")
+                    }
+                }.getOrNull()!!
 
             val runtime = InMemoryRuntime(pipelineDef, store, fakeClock())
             runtime.startRun(ingressOf("item1"))
@@ -205,10 +213,11 @@ class InMemoryRuntimeTest :
         test("duplicate ingress records are deduplicated by sourceId") {
             val store = InMemoryStore()
             val adapter = FakeSourceAdapter<String>()
-            val pipelineDef = pipeline<String>("dedup-test") {
-                source("src", adapter)
-                step<String, String>("process") { it }
-            }.getOrNull()!!
+            val pipelineDef =
+                pipeline<String>("dedup-test") {
+                    source("src", adapter)
+                    step<String, String>("process") { it }
+                }.getOrNull()!!
 
             val runtime = InMemoryRuntime(pipelineDef, store, fakeClock())
             val record = IngressRecord<String>(sourceId = "same-id", payload = "hello")
@@ -223,10 +232,11 @@ class InMemoryRuntimeTest :
         test("resumeRuns picks up active runs and completes them") {
             val store = InMemoryStore()
             val adapter = FakeSourceAdapter<String>()
-            val pipelineDef = pipeline<String>("resume-test") {
-                source("src", adapter)
-                step<String, String>("noop") { it }
-            }.getOrNull()!!
+            val pipelineDef =
+                pipeline<String>("resume-test") {
+                    source("src", adapter)
+                    step<String, String>("noop") { it }
+                }.getOrNull()!!
 
             val runtime = InMemoryRuntime(pipelineDef, store, fakeClock())
 

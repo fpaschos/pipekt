@@ -16,20 +16,22 @@ class PipelineValidationTest :
             }
 
         test("valid pipeline builds successfully") {
-            val result = pipeline<String>("test-pipeline") {
-                source("src", fakeAdapter())
-                step<String, String>("step1") { it }
-            }
+            val result =
+                pipeline<String>("test-pipeline") {
+                    source("src", fakeAdapter())
+                    step<String, String>("step1") { it }
+                }
             result.isRight() shouldBe true
             result.getOrNull()!!.name shouldBe "test-pipeline"
         }
 
         test("duplicate step names are rejected") {
-            val result = pipeline<String>("test-pipeline") {
-                source("src", fakeAdapter())
-                step<String, String>("duplicate") { it }
-                step<String, String>("duplicate") { it }
-            }
+            val result =
+                pipeline<String>("test-pipeline") {
+                    source("src", fakeAdapter())
+                    step<String, String>("duplicate") { it }
+                    step<String, String>("duplicate") { it }
+                }
             result.isLeft() shouldBe true
             val errors = result.leftOrNull()!!
             errors.any { it is PipelineValidationError.DuplicateStepName } shouldBe true
@@ -38,22 +40,24 @@ class PipelineValidationTest :
         }
 
         test("duplicate source name clashing with step name is rejected") {
-            val result = pipeline<String>("test-pipeline") {
-                source("shared-name", fakeAdapter())
-                step<String, String>("shared-name") { it }
-            }
+            val result =
+                pipeline<String>("test-pipeline") {
+                    source("shared-name", fakeAdapter())
+                    step<String, String>("shared-name") { it }
+                }
             result.isLeft() shouldBe true
             val errors = result.leftOrNull()!!
             errors.any { it is PipelineValidationError.DuplicateStepName } shouldBe true
         }
 
         test("multiple finalizers are rejected") {
-            val result = pipeline<String>("test-pipeline") {
-                source("src", fakeAdapter())
-                step<String, String>("step1") { it }
-                finalizer<String>("fin1") { _ -> }
-                finalizer<String>("fin2") { _ -> }
-            }
+            val result =
+                pipeline<String>("test-pipeline") {
+                    source("src", fakeAdapter())
+                    step<String, String>("step1") { it }
+                    finalizer<String>("fin1") { _ -> }
+                    finalizer<String>("fin2") { _ -> }
+                }
             result.isLeft() shouldBe true
             val errors = result.leftOrNull()!!
             val multiFinError = errors.filterIsInstance<PipelineValidationError.MultipleFinalizersFound>().firstOrNull()
@@ -61,9 +65,10 @@ class PipelineValidationTest :
         }
 
         test("missing source returns NoSourceDefined error") {
-            val result = pipeline<String>("no-source") {
-                step<String, String>("step1") { it }
-            }
+            val result =
+                pipeline<String>("no-source") {
+                    step<String, String>("step1") { it }
+                }
             result.isLeft() shouldBe true
             result.leftOrNull()!!.any { it is PipelineValidationError.NoSourceDefined } shouldBe true
         }
@@ -76,14 +81,15 @@ class PipelineValidationTest :
         }
 
         test("valid pipeline with filter, persistEach and finalizer builds") {
-            val result = pipeline<String>("full-pipeline") {
-                source("src", fakeAdapter())
-                filter<Nothing>("filter1") { it.isNotEmpty() }
-                persistEach("persist1")
-                step<Int, Nothing>("step1") { it.length }
-                barrier("barrier1", predecessorStep = "step1")
-                finalizer<Int>("fin1") { _ -> }
-            }
+            val result =
+                pipeline<String>("full-pipeline") {
+                    source("src", fakeAdapter())
+                    filter<Nothing>("filter1") { it.isNotEmpty() }
+                    persistEach("persist1")
+                    step<Int, Nothing>("step1") { it.length }
+                    barrier("barrier1", predecessorStep = "step1")
+                    finalizer<Int>("fin1") { _ -> }
+                }
             result.isRight() shouldBe true
         }
     })

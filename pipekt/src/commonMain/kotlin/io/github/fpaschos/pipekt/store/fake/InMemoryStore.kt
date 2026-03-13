@@ -32,13 +32,14 @@ class InMemoryStore : DurableStore {
         nowMs: Long,
     ): RunRecord =
         mutex.withLock {
-            val record = RunRecord(
-                id = Uuid.random().toString(),
-                pipelineName = pipelineName,
-                status = RunStatus.PENDING,
-                createdAtMs = nowMs,
-                updatedAtMs = nowMs,
-            )
+            val record =
+                RunRecord(
+                    id = Uuid.random().toString(),
+                    pipelineName = pipelineName,
+                    status = RunStatus.PENDING,
+                    createdAtMs = nowMs,
+                    updatedAtMs = nowMs,
+                )
             runs[record.id] = record
             record
         }
@@ -76,16 +77,17 @@ class InMemoryStore : DurableStore {
             val existing = workItems.values.any { it.runId == runId && it.sourceId == record.sourceId }
             if (existing) return@withLock AppendIngressResult.DUPLICATE
 
-            val item = WorkItem(
-                id = Uuid.random().toString(),
-                runId = runId,
-                sourceId = record.sourceId,
-                currentStep = stepName,
-                status = WorkItemStatus.PENDING,
-                payloadJson = payloadJson,
-                createdAtMs = nowMs,
-                updatedAtMs = nowMs,
-            )
+            val item =
+                WorkItem(
+                    id = Uuid.random().toString(),
+                    runId = runId,
+                    sourceId = record.sourceId,
+                    currentStep = stepName,
+                    status = WorkItemStatus.PENDING,
+                    payloadJson = payloadJson,
+                    createdAtMs = nowMs,
+                    updatedAtMs = nowMs,
+                )
             workItems[item.id] = item
             AppendIngressResult.APPENDED
         }
@@ -96,9 +98,10 @@ class InMemoryStore : DurableStore {
         max: Int,
     ): List<WorkItem> =
         mutex.withLock {
-            val pending = workItems.values
-                .filter { it.runId == runId && it.currentStep == stepName && it.status == WorkItemStatus.PENDING }
-                .take(max)
+            val pending =
+                workItems.values
+                    .filter { it.runId == runId && it.currentStep == stepName && it.status == WorkItemStatus.PENDING }
+                    .take(max)
 
             pending.forEach { item ->
                 workItems[item.id] = item.copy(status = WorkItemStatus.IN_PROGRESS)
@@ -123,12 +126,13 @@ class InMemoryStore : DurableStore {
     ): Unit =
         mutex.withLock {
             workItems[workItemId]?.let { item ->
-                workItems[workItemId] = item.copy(
-                    currentStep = nextStep,
-                    status = status,
-                    payloadJson = payloadJson,
-                    updatedAtMs = nowMs,
-                )
+                workItems[workItemId] =
+                    item.copy(
+                        currentStep = nextStep,
+                        status = status,
+                        payloadJson = payloadJson,
+                        updatedAtMs = nowMs,
+                    )
             }
         }
 
@@ -192,11 +196,12 @@ class InMemoryStore : DurableStore {
     ): Unit =
         mutex.withLock {
             workItems[workItemId]?.let { item ->
-                workItems[workItemId] = item.copy(
-                    currentStep = stepName,
-                    status = WorkItemStatus.FAILED,
-                    updatedAtMs = nowMs,
-                )
+                workItems[workItemId] =
+                    item.copy(
+                        currentStep = stepName,
+                        status = WorkItemStatus.FAILED,
+                        updatedAtMs = nowMs,
+                    )
             }
         }
 

@@ -16,11 +16,12 @@ class TypeChainValidationTest :
             }
 
         test("pipeline with chained steps builds correctly") {
-            val result = pipeline<String>("chain-test") {
-                source("src", fakeAdapter())
-                step<Int, Nothing>("parse") { it.length }
-                step<String, Nothing>("format") { "len=$it" }
-            }
+            val result =
+                pipeline<String>("chain-test") {
+                    source("src", fakeAdapter())
+                    step<Int, Nothing>("parse") { it.length }
+                    step<String, Nothing>("format") { "len=$it" }
+                }
             result.isRight() shouldBe true
             val def = result.getOrNull()!!
             def.operators.size shouldBe 2
@@ -29,13 +30,14 @@ class TypeChainValidationTest :
         }
 
         test("pipeline retains all operator names in order") {
-            val result = pipeline<String>("order-test") {
-                source("src", fakeAdapter())
-                step<String, String>("a") { it }
-                filter<Nothing>("b") { it.isNotEmpty() }
-                persistEach("c")
-                step<String, String>("d") { it }
-            }
+            val result =
+                pipeline<String>("order-test") {
+                    source("src", fakeAdapter())
+                    step<String, String>("a") { it }
+                    filter<Nothing>("b") { it.isNotEmpty() }
+                    persistEach("c")
+                    step<String, String>("d") { it }
+                }
             result.isRight() shouldBe true
             val def = result.getOrNull()!!
             def.operators.map { it.name } shouldBe listOf("a", "b", "c", "d")
@@ -43,10 +45,11 @@ class TypeChainValidationTest :
 
         test("pipeline source is preserved in definition") {
             val adapter = fakeAdapter()
-            val result = pipeline<String>("src-test") {
-                source("my-source", adapter)
-                step<String, String>("step") { it }
-            }
+            val result =
+                pipeline<String>("src-test") {
+                    source("my-source", adapter)
+                    step<String, String>("step") { it }
+                }
             result.isRight() shouldBe true
             val def = result.getOrNull()!!
             def.source.name shouldBe "my-source"
@@ -54,10 +57,11 @@ class TypeChainValidationTest :
         }
 
         test("filter with custom reason is preserved") {
-            val result = pipeline<String>("filter-test") {
-                source("src", fakeAdapter())
-                filter<Nothing>("dedup", filteredReason = FilteredReason.DUPLICATE) { true }
-            }
+            val result =
+                pipeline<String>("filter-test") {
+                    source("src", fakeAdapter())
+                    filter<Nothing>("dedup", filteredReason = FilteredReason.DUPLICATE) { true }
+                }
             result.isRight() shouldBe true
             val def = result.getOrNull()!!
             val filterOp = def.operators.filterIsInstance<FilterDef<*, *>>().first()
@@ -66,10 +70,11 @@ class TypeChainValidationTest :
 
         test("retry policy is preserved on step definition") {
             val policy = RetryPolicy(maxAttempts = 3, backoffMs = 500L)
-            val result = pipeline<String>("retry-test") {
-                source("src", fakeAdapter())
-                step<String, String>("with-retry", retryPolicy = policy) { it }
-            }
+            val result =
+                pipeline<String>("retry-test") {
+                    source("src", fakeAdapter())
+                    step<String, String>("with-retry", retryPolicy = policy) { it }
+                }
             result.isRight() shouldBe true
             val def = result.getOrNull()!!
             val stepOp = def.operators.filterIsInstance<StepDef<*, *, *>>().first()
