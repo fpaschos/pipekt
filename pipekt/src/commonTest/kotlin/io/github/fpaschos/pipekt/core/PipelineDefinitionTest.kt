@@ -6,6 +6,16 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
 
+/**
+ * Tests for [PipelineDefinition] validation and the [pipeline] DSL builder.
+ *
+ * **Contract and behavior coverage:**
+ * - Valid pipeline builds (name, maxInFlight, source + step).
+ * - [PipelineDefinition.retentionDays]: default 30 and override.
+ * - Validation errors: duplicate step names (including source/step name clash), no source defined,
+ *   empty operators, invalid or negative maxInFlight; multiple errors reported together.
+ * - DSL builder: source, step, filter, persistEach; build() returns Either consistent with [validate].
+ */
 class PipelineDefinitionTest :
     FunSpec({
 

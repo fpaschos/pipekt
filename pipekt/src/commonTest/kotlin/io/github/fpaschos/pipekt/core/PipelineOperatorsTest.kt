@@ -4,6 +4,16 @@ import io.kotest.assertions.arrow.core.shouldBeRight
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 
+/**
+ * Tests for operator definitions and their preservation in [PipelineDefinition].
+ *
+ * **Contract and behavior coverage:**
+ * - [StepDef]: retryPolicy preserved (maxAttempts, backoffMs).
+ * - [FilterDef]: filteredReason default (BELOW_THRESHOLD) and override (e.g. DUPLICATE).
+ * - [PersistEachDef]: name preserved; no function.
+ * - Operator order and source preservation in the built definition.
+ * - Full pipeline with filter + persistEach builds and retains correct operator list.
+ */
 class PipelineOperatorsTest :
     FunSpec({
 

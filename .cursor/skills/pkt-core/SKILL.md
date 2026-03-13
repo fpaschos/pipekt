@@ -11,7 +11,7 @@ Use this skill when implementing or refactoring core pipeline behavior in `pipek
 ## Scope
 
 - `PipelineDefinition`, operator composition, source adapters, payload serialization boundaries.
-- Public API surface and backwards compatibility.
+- Public API surface and backwards compatibility. Public API must be **extensively documented** (KDoc).
 
 ## Rules
 
@@ -24,5 +24,5 @@ Use this skill when implementing or refactoring core pipeline behavior in `pipek
 
 1. Confirm the behavior and API contract before editing.
 2. Make minimal, targeted changes in `commonMain`.
-3. Update KDoc when public behavior changes.
+3. **Extensive KDoc is required:** All public types, functions, parameters, and return values in `commonMain` must have KDoc covering purpose, contract/usage where relevant, and parameters/returns. When adding or changing public API, add or update KDoc to this standard.
 4. Add or update tests for the changed behavior.

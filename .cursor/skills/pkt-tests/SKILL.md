@@ -17,6 +17,10 @@ Use this skill when adding behavior, fixing bugs, or changing contracts.
 - Cover success and edge/error paths where relevant.
 - Keep tests deterministic; do not rely on timing-sensitive assertions.
 
+## Documentation
+
+- Test classes must be **extensively documented** at class level. For each test class, add KDoc that describes the contract and behavior coverage (what the tests validate, which edge cases and success paths are covered). When adding or changing behavior coverage, add or update this class-level KDoc so the skill and reviewers can see scope at a glance.
+
 ## Minimum validation
 1. Run targeted tests for changed areas.
 2. Run full `:pipekt:check` before finalizing substantial changes.

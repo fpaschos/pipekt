@@ -7,7 +7,6 @@
 - [x] operator definitions (SourceDef, StepDef, FilterDef, PersistEachDef)
 - [x] SourceAdapter contract
 - [x] PayloadSerializer interface + KotlinxPayloadSerializer
-- [x] Clock.kt (commonMain) + Clock.jvm.kt (jvmMain)
 - [x] PipelineDefinition + validate() + DSL builder
 - [x] PipelineDefinitionTest + PipelineOperatorsTest passing
 
