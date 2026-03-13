@@ -1,8 +1,10 @@
 package io.github.fpaschos.pipekt.core
 
 import arrow.core.Either
-import arrow.core.left
-import arrow.core.right
+import arrow.core.NonEmptyList
+import arrow.core.raise.ExperimentalRaiseAccumulateApi
+import arrow.core.raise.accumulate
+import arrow.core.raise.either
 import kotlin.reflect.KType
 import kotlin.reflect.typeOf
 
@@ -46,10 +48,10 @@ sealed class PipelineValidationError {
     /** No source was defined via [PipelineBuilder.source]. */
     data object NoSourceDefined : PipelineValidationError()
 
-    /** [operators] is empty; at least one step, filter, or persistEach is required. */
+    /** operators are empty; at least one step, filter, or persistEach is required. */
     data object EmptyPipeline : PipelineValidationError()
 
-    /** [maxInFlight] is not positive; must be >= 1 for backpressure. */
+    /** maxInFlight is not positive; must be >= 1 for backpressure. */
     data object InvalidMaxInFlight : PipelineValidationError()
 
     /**
@@ -89,6 +91,7 @@ sealed class PipelineValidationError {
  * @param retentionDays Default 30; used for archival.
  * @return [Either.Right] with [PipelineDefinition] on success, [Either.Left] with non-empty list of [PipelineValidationError] on failure.
  */
+@OptIn(ExperimentalRaiseAccumulateApi::class)
 fun validate(
     name: String,
     source: SourceDef<*>?,
@@ -96,85 +99,99 @@ fun validate(
     operators: List<OperatorDef>,
     maxInFlight: Int,
     retentionDays: Int = 30,
-): Either<List<PipelineValidationError>, PipelineDefinition> {
-    val errors = mutableListOf<PipelineValidationError>()
+): Either<List<PipelineValidationError>, PipelineDefinition> =
+    // either<NonEmptyList<...>> gives us Raise<NonEmptyList<E>>, on which accumulate{} is defined.
+    // mapLeft converts NonEmptyList → List to match the public return type the callers expect.
+    either<NonEmptyList<PipelineValidationError>, PipelineDefinition> {
+        // accumulate{} runs the block as RaiseAccumulate<E>: raise() collects into the list
+        // instead of short-circuiting, so every independent check is always evaluated.
+        val resolvedSource =
+            accumulate {
+                ensureOrAccumulate(source != null) { PipelineValidationError.NoSourceDefined }
+                ensureOrAccumulate(operators.isNotEmpty()) { PipelineValidationError.EmptyPipeline }
+                ensureOrAccumulate(maxInFlight > 0) { PipelineValidationError.InvalidMaxInFlight }
 
-    if (source == null) errors += PipelineValidationError.NoSourceDefined
-    if (operators.isEmpty()) errors += PipelineValidationError.EmptyPipeline
-    if (maxInFlight <= 0) errors += PipelineValidationError.InvalidMaxInFlight
-
-    val allNames =
-        buildList {
-            source?.let { add(it.name) }
-            addAll(operators.map { it.name })
-        }
-    allNames
-        .groupBy { it }
-        .filter { it.value.size > 1 }
-        .keys
-        .forEach { errors += PipelineValidationError.DuplicateStepName(it) }
-
-    // Type-chain validation: walk operators tracking the current output type.
-    // Only runs when a source is present (otherwise NoSourceDefined is already collected).
-    if (source != null) {
-        var currentType = sourceType
-        for (op in operators) {
-            when (op) {
-                is StepDef<*, *> -> {
-                    if (op.inputType != currentType) {
-                        errors +=
-                            PipelineValidationError.TypeMismatch(
-                                stepName = op.name,
-                                expected = op.inputType,
-                                actual = currentType,
-                            )
+                val allNames =
+                    buildList {
+                        source?.let { add(it.name) }
+                        addAll(operators.map { it.name })
                     }
-                    currentType = op.outputType
-                }
-                is FilterDef<*> -> {
-                    if (op.inputType != currentType) {
-                        errors +=
-                            PipelineValidationError.TypeMismatch(
-                                stepName = op.name,
-                                expected = op.inputType,
-                                actual = currentType,
-                            )
+                allNames
+                    .groupBy { it }
+                    .filter { it.value.size > 1 }
+                    .keys
+                    .forEach { dupName -> accumulate(PipelineValidationError.DuplicateStepName(dupName)) }
+
+                // Type-chain validation — only when source is present.
+                if (source != null) {
+                    var currentType = sourceType
+                    for (op in operators) {
+                        when (op) {
+                            is StepDef<*, *> -> {
+                                ensureOrAccumulate(op.inputType == currentType) {
+                                    PipelineValidationError.TypeMismatch(
+                                        stepName = op.name,
+                                        expected = op.inputType,
+                                        actual = currentType,
+                                    )
+                                }
+                                currentType = op.outputType
+                            }
+
+                            is FilterDef<*> -> {
+                                ensureOrAccumulate(op.inputType == currentType) {
+                                    PipelineValidationError.TypeMismatch(
+                                        stepName = op.name,
+                                        expected = op.inputType,
+                                        actual = currentType,
+                                    )
+                                }
+                                // filter is transparent — currentType unchanged
+                            }
+
+                            is PersistEachDef -> {
+                                // transparent pass-through; type unchanged
+                            }
+
+                            is SourceDef<*> -> {
+                                // source is not in the operators list; no-op
+                            }
+                        }
                     }
-                    // filter output type is same as input — currentType unchanged
                 }
-                is PersistEachDef -> {
-                    // transparent pass-through; type unchanged
-                }
-                is SourceDef<*> -> {
-                    // source is not in the operators list; no-op
-                }
+
+                source
             }
-        }
-    }
 
-    return if (errors.isEmpty() && source != null) {
         PipelineDefinition(
             name = name,
-            source = source,
+            source = resolvedSource!!,
             operators = operators,
             maxInFlight = maxInFlight,
             retentionDays = retentionDays,
-        ).right()
-    } else {
-        errors.left()
-    }
-}
+        )
+    }.mapLeft { it.toList() }
 
 // ── DSL builder ───────────────────────────────────────────────────────────────
 
 /**
- * Builder for constructing a pipeline via the DSL (source, step, filter, persistEach).
+ * Builder for constructing a pipeline via the DSL; the receiver of the [pipeline] block.
  *
- * Use the top-level [pipeline] function to create a builder, configure it in the block, then
- * [build] returns the same result as [validate]. Type [T] is the source payload type.
+ * Each operator call ([source], [step], [filter], [persistEach]) is an independent statement
+ * on this receiver — no chaining is required. Type [T] is the source payload type, fixed at
+ * the [pipeline] call site.
  *
- * @param sourceType The [KType] of the source payload [T]; captured via `typeOf<T>()` at the
- *   [pipeline] call site. Used as the starting type for type-chain validation.
+ * Inter-step type compatibility is validated at [build] time via [validate]; the runtime [KType]
+ * of each step's input is read from [currentOutputType], which is advanced by each [step] call.
+ * This means a single reified type param on [step] (`O2` — the output) is sufficient; no explicit
+ * input type annotation is needed at the call site.
+ *
+ * @param T Source payload type.
+ * @param name Pipeline name.
+ * @param maxInFlight Maximum in-flight items per run; must be positive.
+ * @param retentionDays Archival cutoff in days; default 30.
+ * @param sourceType [KType] of [T]; captured via `typeOf<T>()` at the [pipeline] call site and
+ *   used as the starting point for type-chain validation in [validate].
  */
 class PipelineBuilder<T>(
     private val name: String,
@@ -186,42 +203,47 @@ class PipelineBuilder<T>(
 
     @PublishedApi internal val operators = mutableListOf<OperatorDef>()
 
-    // Tracks the output type of the most recently added operator; starts as sourceType.
-    // Updated by step() and filter() so each subsequent call can read the current flowing type.
+    // Tracks the KType flowing out of the most recently added operator (or source).
+    // Advanced by step(); read by step() and filter() to populate inputType on the operator def.
     @PublishedApi internal var currentOutputType: KType = sourceType
 
     /**
      * Sets the single source for this pipeline.
+     *
      * @param name Unique name for the source step.
      * @param adapter The [SourceAdapter] implementation for polling and ack/nack.
-     * @return this builder for chaining.
      */
     fun source(
         name: String,
         adapter: SourceAdapter<T>,
-    ): PipelineBuilder<T> {
+    ) {
         source = SourceDef(name = name, adapter = adapter)
-        return this
     }
 
     /**
      * Appends a transform step.
      *
-     * [I] and [O] are captured as reified types at the call site. The error channel is fixed to
-     * [ItemFailure] — no error type parameter is required. Steps raise any [ItemFailure] subtype
-     * directly via the [Raise]<[ItemFailure]> context receiver.
-     * The step's input type is validated against the preceding operator's output type at [build] time.
+     * Both [I] (input) and [O] (output) are reified and inferred from [fn] at the call site.
+     * When the lambda input type can be determined from the lambda parameter, no explicit type
+     * annotation is needed at the call site (e.g. `{ it: String -> it.length }` pins `I = String`
+     * and the compiler infers `O = Int`; for same-type steps `{ it: String -> it }` pins both).
+     *
+     * [inputType] is captured via `typeOf<I>()` and [outputType] via `typeOf<O>()` for payload
+     * serialization at runtime. [currentOutputType] is advanced to `typeOf<O>()` for the next operator.
+     *
+     * The error channel is fixed to [ItemFailure] — steps raise any [ItemFailure] subtype via
+     * the [arrow.core.raise.Raise]<[ItemFailure]> context.
      *
      * @param name Unique step name.
      * @param retryPolicy Retry policy for this step; default single attempt.
-     * @param fn The step function.
-     * @return this builder for chaining.
+     * @param fn The step function; specify the input type as the lambda parameter type so that
+     *   both [I] and [O] can be resolved.
      */
     inline fun <reified I, reified O> step(
         name: String,
         retryPolicy: RetryPolicy = RetryPolicy(maxAttempts = 1),
         noinline fn: StepFn<I, O>,
-    ): PipelineBuilder<T> {
+    ) {
         @Suppress("UNCHECKED_CAST")
         operators +=
             StepDef(
@@ -232,26 +254,24 @@ class PipelineBuilder<T>(
                 outputType = typeOf<O>(),
             )
         currentOutputType = typeOf<O>()
-        return this
     }
 
     /**
      * Appends a filter step; items for which [predicate] returns false are filtered out.
      *
-     * [I] is the input type flowing into the filter; it must match the output type of the
-     * preceding operator (validated at [build] time). Filter output type equals input type —
-     * items pass through unchanged when kept. The error channel is fixed to [ItemFailure].
+     * [I] is reified and inferred from [predicate] at the call site. [FilterDef.inputType] is
+     * captured via `typeOf<I>()` for type-chain validation and serialization. The output type
+     * is unchanged (filter is transparent). The error channel is fixed to [ItemFailure].
      *
      * @param name Unique step name.
      * @param filteredReason Reason when filtered; default [FilteredReason.BELOW_THRESHOLD].
-     * @param predicate Returns true to keep, false to filter.
-     * @return this builder for chaining.
+     * @param predicate Returns true to keep, false to filter out.
      */
     inline fun <reified I> filter(
         name: String,
         filteredReason: FilteredReason = FilteredReason.BELOW_THRESHOLD,
         noinline predicate: StepFn<I, Boolean>,
-    ): PipelineBuilder<T> {
+    ) {
         @Suppress("UNCHECKED_CAST")
         operators +=
             FilterDef(
@@ -261,22 +281,25 @@ class PipelineBuilder<T>(
                 inputType = typeOf<I>(),
             )
         // filter is transparent — currentOutputType unchanged
-        return this
     }
 
     /**
-     * Appends a persist-each boundary (durable checkpoint before next step).
+     * Appends a persist-each boundary (durable checkpoint before the next step).
+     *
+     * Type-transparent: [currentOutputType] is unchanged.
+     *
      * @param name Unique step name.
-     * @return this builder for chaining.
      */
-    fun persistEach(name: String): PipelineBuilder<T> {
+    fun persistEach(name: String) {
         operators += PersistEachDef(name = name)
-        return this
     }
 
     /**
-     * Validates and builds the pipeline; equivalent to [validate] with the builder's current state.
-     * @return [Either.Right] with [PipelineDefinition] on success, [Either.Left] with [PipelineValidationError] list on failure.
+     * Validates and builds the pipeline; equivalent to calling [validate] with the builder's
+     * current state.
+     *
+     * @return [Either.Right] with [PipelineDefinition] on success, [Either.Left] with a non-empty
+     *   list of [PipelineValidationError] on failure.
      */
     fun build(): Either<List<PipelineValidationError>, PipelineDefinition> =
         validate(
@@ -290,12 +313,18 @@ class PipelineBuilder<T>(
 }
 
 /**
- * Top-level DSL entry to define a pipeline: creates a [PipelineBuilder], runs [block] to configure
- * source and operators, then returns the result of [build] (validated [PipelineDefinition] or errors).
+ * Top-level DSL entry to define a pipeline.
  *
- * `T` is reified so that `typeOf<T>()` can be captured and threaded into the builder for type-chain
- * validation and payload serialization.
+ * Creates a [PipelineBuilder]<[T]> as the block receiver. Each call inside the block
+ * ([PipelineBuilder.source], [PipelineBuilder.step], [PipelineBuilder.filter],
+ * [PipelineBuilder.persistEach]) is a standalone statement — no chaining is required and no
+ * explicit input/output type annotations are needed on [PipelineBuilder.step] or
+ * [PipelineBuilder.filter].
  *
+ * `T` is reified so that `typeOf<T>()` can be captured for type-chain validation and payload
+ * serialization. `T` can be inferred from the adapter passed to [PipelineBuilder.source].
+ *
+ * @param T Source payload type.
  * @param name Pipeline name.
  * @param maxInFlight Maximum in-flight items per run (must be positive).
  * @param retentionDays Archival cutoff in days; default 30.

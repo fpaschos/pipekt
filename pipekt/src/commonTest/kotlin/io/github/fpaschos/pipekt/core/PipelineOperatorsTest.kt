@@ -8,10 +8,16 @@ import kotlin.reflect.typeOf
 /**
  * Tests for operator definitions and their preservation in [PipelineDefinition].
  *
+ * All operator types ([StepDef], [FilterDef], [PersistEachDef]) are built via the [PipelineBuilder]
+ * DSL. Each operator call is an independent statement on the block receiver — no chaining is
+ * required and no explicit input/output type annotations are needed at call sites.
+ *
  * **Contract and behavior coverage:**
- * - [StepDef]: retryPolicy preserved (maxAttempts, backoffMs); inputType and outputType captured.
- * - [FilterDef]: filteredReason default (BELOW_THRESHOLD) and override (e.g. DUPLICATE); inputType captured.
- * - [PersistEachDef]: name preserved; no function.
+ * - [StepDef]: retryPolicy preserved (maxAttempts, backoffMs); inputType captured from the
+ *   preceding operator's output type; outputType captured via reified inference from the lambda.
+ * - [FilterDef]: filteredReason default (BELOW_THRESHOLD) and override (e.g. DUPLICATE); inputType
+ *   captured from the current flowing output type.
+ * - [PersistEachDef]: name preserved; type-transparent.
  * - Operator order and source preservation in the built definition.
  * - Full pipeline with filter + persistEach builds and retains correct operator list.
  */
@@ -35,7 +41,7 @@ class PipelineOperatorsTest :
             val def =
                 pipeline("retry-test", maxInFlight = 10) {
                     source("src", fakeAdapter())
-                    step<String, String>("with-retry", retryPolicy = policy) { it }
+                    step("with-retry", retryPolicy = policy) { s: String -> s }
                 }.shouldBeRight()
             val stepOp = def.operators.filterIsInstance<StepDef<*, *>>().first()
             stepOp.name shouldBe "with-retry"
@@ -46,7 +52,7 @@ class PipelineOperatorsTest :
             val def =
                 pipeline("type-capture-test", maxInFlight = 10) {
                     source("src", fakeAdapter())
-                    step<String, Int>("to-int") { it.length }
+                    step("to-int") { it: String -> it.length }
                 }.shouldBeRight()
             val stepOp = def.operators.filterIsInstance<StepDef<*, *>>().first()
             stepOp.inputType shouldBe typeOf<String>()
@@ -57,7 +63,7 @@ class PipelineOperatorsTest :
             val def =
                 pipeline("filter-test", maxInFlight = 10) {
                     source("src", fakeAdapter())
-                    filter<String>("dedup", filteredReason = FilteredReason.DUPLICATE) { true }
+                    filter("dedup", filteredReason = FilteredReason.DUPLICATE) { _: String -> true }
                 }.shouldBeRight()
             val filterOp = def.operators.filterIsInstance<FilterDef<*>>().first()
             filterOp.filteredReason shouldBe FilteredReason.DUPLICATE
@@ -67,7 +73,7 @@ class PipelineOperatorsTest :
             val def =
                 pipeline("filter-default", maxInFlight = 10) {
                     source("src", fakeAdapter())
-                    filter<String>("default-filter") { true }
+                    filter("default-filter") { _: String -> true }
                 }.shouldBeRight()
             val filterOp = def.operators.filterIsInstance<FilterDef<*>>().first()
             filterOp.filteredReason shouldBe FilteredReason.BELOW_THRESHOLD
@@ -77,7 +83,7 @@ class PipelineOperatorsTest :
             val def =
                 pipeline("filter-type-test", maxInFlight = 10) {
                     source("src", fakeAdapter())
-                    filter<String>("f") { it.isNotEmpty() }
+                    filter("f") { it: String -> it.isNotEmpty() }
                 }.shouldBeRight()
             val filterOp = def.operators.filterIsInstance<FilterDef<*>>().first()
             filterOp.inputType shouldBe typeOf<String>()
@@ -87,7 +93,7 @@ class PipelineOperatorsTest :
             val def =
                 pipeline("persist-test", maxInFlight = 10) {
                     source("src", fakeAdapter())
-                    step<String, String>("step1") { it }
+                    step("step1") { it: String -> it }
                     persistEach("checkpoint-1")
                 }.shouldBeRight()
             val persistOp = def.operators.filterIsInstance<PersistEachDef>().first()
@@ -98,10 +104,10 @@ class PipelineOperatorsTest :
             val def =
                 pipeline("order-test", maxInFlight = 10) {
                     source("src", fakeAdapter())
-                    filter<String>("a") { true }
-                    step<String, String>("b") { it }
+                    filter("a") { _: String -> true }
+                    step("b") { it: String -> it }
                     persistEach("c")
-                    step<String, String>("d") { it }
+                    step("d") { it: String -> it }
                 }.shouldBeRight()
             def.operators.map { it.name } shouldBe listOf("a", "b", "c", "d")
         }
@@ -111,7 +117,7 @@ class PipelineOperatorsTest :
             val def =
                 pipeline("src-test", maxInFlight = 10) {
                     source("my-source", adapter)
-                    step<String, String>("step1") { it }
+                    step("step1") { it: String -> it }
                 }.shouldBeRight()
             def.source.name shouldBe "my-source"
             def.source.adapter shouldBe adapter
@@ -121,10 +127,10 @@ class PipelineOperatorsTest :
             val def =
                 pipeline("full-pipeline", maxInFlight = 50) {
                     source("src", fakeAdapter())
-                    filter<String>("filter1") { it.isNotEmpty() }
-                    step<String, String>("enrich") { it.uppercase() }
+                    filter("filter1") { it: String -> it.isNotEmpty() }
+                    step("enrich") { it: String -> it.uppercase() }
                     persistEach("checkpoint")
-                    step<String, String>("publish") { it }
+                    step("publish") { it: String -> it }
                 }.shouldBeRight()
             def.operators.size shouldBe 4
         }

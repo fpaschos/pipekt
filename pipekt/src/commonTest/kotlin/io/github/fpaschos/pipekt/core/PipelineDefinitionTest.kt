@@ -11,13 +11,16 @@ import kotlin.reflect.typeOf
  * Tests for [PipelineDefinition] validation and the [pipeline] DSL builder.
  *
  * **Contract and behavior coverage:**
- * - Valid pipeline builds (name, maxInFlight, source + step).
+ * - Valid pipeline builds (name, maxInFlight, source + step); operator types fully inferred, no
+ *   explicit annotations required at step/filter call sites.
  * - [PipelineDefinition.retentionDays]: default 30 and override.
  * - Validation errors: duplicate step names (including source/step name clash), no source defined,
  *   empty operators, invalid or negative maxInFlight; multiple errors reported together.
- * - DSL builder: source, step, filter, persistEach; build() returns Either consistent with [validate].
- * - Type-chain validation: [PipelineValidationError.TypeMismatch] for step/filter input type mismatches;
- *   [PersistEachDef] is transparent; valid same-type chains pass.
+ * - DSL builder: [PipelineBuilder] as block receiver; source, step, filter, persistEach are
+ *   independent statements — no chaining.
+ * - Type-chain validation via [validate]: [PipelineValidationError.TypeMismatch] for step/filter
+ *   input type mismatches; [PersistEachDef] is transparent; valid same-type chains pass.
+ *   Type mismatches tested via [validate] directly (runtime-only enforcement).
  */
 class PipelineDefinitionTest :
     FunSpec({
@@ -38,7 +41,7 @@ class PipelineDefinitionTest :
             val def =
                 pipeline("test-pipeline", maxInFlight = 100) {
                     source("src", fakeAdapter())
-                    step<String, String>("step1") { it }
+                    step("step1") { it: String -> it }
                 }.shouldBeRight()
             def.name shouldBe "test-pipeline"
             def.maxInFlight shouldBe 100
@@ -48,7 +51,7 @@ class PipelineDefinitionTest :
             val def =
                 pipeline("default-retention", maxInFlight = 10) {
                     source("src", fakeAdapter())
-                    step<String, String>("step1") { it }
+                    step("step1") { it: String -> it }
                 }.shouldBeRight()
             def.retentionDays shouldBe 30
         }
@@ -57,7 +60,7 @@ class PipelineDefinitionTest :
             val def =
                 pipeline("custom-retention", maxInFlight = 10, retentionDays = 7) {
                     source("src", fakeAdapter())
-                    step<String, String>("step1") { it }
+                    step("step1") { it: String -> it }
                 }.shouldBeRight()
             def.retentionDays shouldBe 7
         }
@@ -66,8 +69,8 @@ class PipelineDefinitionTest :
             val errors =
                 pipeline("dupe-test", maxInFlight = 10) {
                     source("src", fakeAdapter())
-                    step<String, String>("duplicate") { it }
-                    step<String, String>("duplicate") { it }
+                    step("duplicate") { it: String -> it }
+                    step("duplicate") { it: String -> it }
                 }.shouldBeLeft()
             val dupeError = errors.filterIsInstance<PipelineValidationError.DuplicateStepName>().first()
             dupeError.name shouldBe "duplicate"
@@ -77,7 +80,7 @@ class PipelineDefinitionTest :
             val errors =
                 pipeline("clash-test", maxInFlight = 10) {
                     source("shared-name", fakeAdapter())
-                    step<String, String>("shared-name") { it }
+                    step("shared-name") { it: String -> it }
                 }.shouldBeLeft()
             errors.filterIsInstance<PipelineValidationError.DuplicateStepName>().shouldContainExactlyInAnyOrder(
                 PipelineValidationError.DuplicateStepName("shared-name"),
@@ -130,7 +133,7 @@ class PipelineDefinitionTest :
         test("maxInFlight of 1 is accepted") {
             pipeline("min-flight", maxInFlight = 1) {
                 source("src", fakeAdapter())
-                step<String, String>("step1") { it }
+                step("step1") { it: String -> it }
             }.shouldBeRight()
         }
 
@@ -169,22 +172,42 @@ class PipelineDefinitionTest :
         }
 
         // ── Type-chain validation ──────────────────────────────────────────────
+        // Mismatched chains cannot be expressed via the DSL (compile-time enforcement);
+        // these tests go through validate() directly with pre-built operator lists.
 
         test("valid String-to-String type chain passes validation") {
             pipeline("chain-valid", maxInFlight = 10) {
                 source("src", fakeAdapter())
-                step<String, String>("step1") { it }
-                step<String, String>("step2") { it.uppercase() }
+                step("step1") { it: String -> it }
+                step("step2") { it: String -> it.uppercase() }
             }.shouldBeRight()
         }
 
         test("type mismatch between adjacent steps is rejected") {
+            val toInt: StepFn<String, Int> = { s -> s.length }
+            val expectsString: StepFn<String, String> = { s -> s }
             val errors =
-                pipeline("chain-mismatch", maxInFlight = 10) {
-                    source("src", fakeAdapter())
-                    step<String, Int>("to-int") { it.length }
-                    step<String, String>("expects-string") { it }
-                }.shouldBeLeft()
+                validate(
+                    name = "chain-mismatch",
+                    source = SourceDef("src", fakeAdapter()),
+                    sourceType = typeOf<String>(),
+                    operators =
+                        listOf(
+                            StepDef(
+                                name = "to-int",
+                                fn = toInt,
+                                inputType = typeOf<String>(),
+                                outputType = typeOf<Int>(),
+                            ),
+                            StepDef(
+                                name = "expects-string",
+                                fn = expectsString,
+                                inputType = typeOf<String>(),
+                                outputType = typeOf<String>(),
+                            ),
+                        ),
+                    maxInFlight = 10,
+                ).shouldBeLeft()
             val mismatch = errors.filterIsInstance<PipelineValidationError.TypeMismatch>().first()
             mismatch.stepName shouldBe "expects-string"
             mismatch.expected shouldBe typeOf<String>()
@@ -194,33 +217,52 @@ class PipelineDefinitionTest :
         test("PersistEachDef is transparent in the type chain") {
             pipeline("chain-persist", maxInFlight = 10) {
                 source("src", fakeAdapter())
-                step<String, String>("step1") { it }
+                step("step1") { it: String -> it }
                 persistEach("checkpoint")
-                step<String, String>("step2") { it }
+                step("step2") { it: String -> it }
             }.shouldBeRight()
         }
 
         test("filter with matching input type passes type-chain validation") {
             pipeline("chain-filter-valid", maxInFlight = 10) {
                 source("src", fakeAdapter())
-                filter<String>("keep-nonempty") { it.isNotEmpty() }
-                step<String, String>("step1") { it }
+                filter("keep-nonempty") { it: String -> it.isNotEmpty() }
+                step("step1") { it: String -> it }
             }.shouldBeRight()
         }
 
         test("multiple independent type mismatches are all reported") {
-            // to-int: String -> Int (ok, matches source String)
-            // wrong-int-1: Int -> String (ok, matches Int output of to-int)
-            // wrong-string: Int -> Int mismatches: declared input Int but currentOutput is String
-            // Use two separate mismatch points: String->Int->String->Int chain where
-            // steps 2 and 4 expect Int but receive String output from prior steps.
+            val toInt: StepFn<String, Int> = { s -> s.length }
+            val mismatch1: StepFn<String, String> = { s -> s }
+            val mismatch2: StepFn<Int, String> = { i -> i.toString() }
             val errors =
-                pipeline("chain-multi-mismatch", maxInFlight = 10) {
-                    source("src", fakeAdapter())
-                    step<String, Int>("to-int") { it.length }
-                    step<String, String>("mismatch-1") { it }
-                    step<Int, String>("mismatch-2") { it.toString() }
-                }.shouldBeLeft()
+                validate(
+                    name = "chain-multi-mismatch",
+                    source = SourceDef("src", fakeAdapter()),
+                    sourceType = typeOf<String>(),
+                    operators =
+                        listOf(
+                            StepDef(
+                                name = "to-int",
+                                fn = toInt,
+                                inputType = typeOf<String>(),
+                                outputType = typeOf<Int>(),
+                            ),
+                            StepDef(
+                                name = "mismatch-1",
+                                fn = mismatch1,
+                                inputType = typeOf<String>(),
+                                outputType = typeOf<String>(),
+                            ),
+                            StepDef(
+                                name = "mismatch-2",
+                                fn = mismatch2,
+                                inputType = typeOf<Int>(),
+                                outputType = typeOf<String>(),
+                            ),
+                        ),
+                    maxInFlight = 10,
+                ).shouldBeLeft()
             val mismatches = errors.filterIsInstance<PipelineValidationError.TypeMismatch>()
             mismatches.map { it.stepName }.shouldContainExactlyInAnyOrder("mismatch-1", "mismatch-2")
         }
