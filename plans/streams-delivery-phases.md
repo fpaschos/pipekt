@@ -10,7 +10,11 @@
 - [x] PipelineDefinition + validate() + DSL builder (build() returns Either; errors: DuplicateStepName, NoSourceDefined, EmptyPipeline, InvalidMaxInFlight, TypeMismatch)
 - [x] PipelineDefinitionTest + PipelineOperatorsTest passing
 
-### Phase 1B — Store SPI + Entities (not started)
+### Phase 1B — Store SPI + Entities (complete)
+- [x] RunRecord, WorkItem, AppendIngressResult in `pipekt.store`
+- [x] DurableStore interface with getOrCreateRun, getRun, listActiveRuns, appendIngress, claim, checkpointSuccess/Filtered/Failure, countNonTerminal, reclaimExpiredLeases
+- [x] WorkItemStatus remains in core; store depends on core for IngressRecord and WorkItemStatus
+- [x] Removed AppendIngressResult enum from core in favor of store's bulk result type
 
 ### Phase 1C — InMemoryStore + FakeSourceAdapter (not started)
 
@@ -173,6 +177,15 @@ CREATE INDEX idx_work_items_claim
 ```
 
 No `attempts` table in MVP. No `finalizer_locks` table. Background archival/deletion job targets `work_items` rows older than `retentionDays` days (read from `PipelineDefinition`; default 30; set lower for high-volume pipelines). The `runs` row for an INFINITE pipeline is permanent.
+
+**Run status semantics:** `status` is a coarse run lifecycle and health indicator. For `INFINITE` pipelines the expected values are:
+
+- `ACTIVE` — run is healthy and available for ingestion and execution. An `INFINITE` run typically remains `ACTIVE` for its entire lifetime.
+- `FAILED` — run entered an unrecoverable failure state; no further ingestion or execution should occur for this run.
+
+`idx_runs_active` uses `WHERE status NOT IN ('FAILED')` to quickly locate restartable runs on startup. Only `FAILED` is treated as non-active in v1; `INFINITE` runs have no `COMPLETED` status.
+
+**Rolling-run strategy:** `DurableStore.getOrCreateRun(pipeline, planVersion, nowMs)` is keyed by `(pipeline, planVersion)`. On restart with the same plan version the existing `ACTIVE` run is resumed. When a pipeline change is incompatible with existing work items (e.g. payload schema change, topology rewrite), `planVersion` must be bumped. This creates a new `RunRecord` with a fresh `id` while the older run remains in the `runs` table (usually transitioning to `FAILED` or left as a historical record). Tooling that decides which run to resume must use the `(pipeline, planVersion)` pair together with `status` from `listActiveRuns`.
 
 ### Implementation Notes (sqlx4k)
 

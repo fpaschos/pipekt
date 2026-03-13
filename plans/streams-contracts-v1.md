@@ -148,28 +148,33 @@ Rules:
 ```kotlin
 interface DurableStore {
   // Run lifecycle
-  suspend fun getOrCreateRun(pipeline: String, planVersion: String, nowMs: Long): RunRecord
+  suspend fun getOrCreateRun(pipeline: String, planVersion: String): RunRecord
   suspend fun getRun(runId: String): RunRecord?
   suspend fun listActiveRuns(pipeline: String): List<RunRecord>
 
   // Ingress — bulk, idempotent
-  suspend fun appendIngress(runId: String, records: List<IngressRecord<*>>, nowMs: Long): AppendIngressResult
+  suspend fun appendIngress(runId: String, records: List<IngressRecord<*>>): AppendIngressResult
 
   // Claim — atomic SELECT FOR UPDATE SKIP LOCKED
-  suspend fun claim(step: String, runId: String, limit: Int, leaseMs: Long, workerId: String): List<WorkItem>
+  suspend fun claim(step: String, runId: String, limit: Int, leaseDuration: Duration, workerId: String): List<WorkItem>
 
   // Atomic checkpoints — each is a single transaction (attempt counter + item state)
-  suspend fun checkpointSuccess(item: WorkItem, outputJson: String, nextStep: String?, nowMs: Long)
-  suspend fun checkpointFiltered(item: WorkItem, reason: String, nowMs: Long)
-  suspend fun checkpointFailure(item: WorkItem, errorJson: String, retryAtEpochMs: Long?, nowMs: Long)
+  suspend fun checkpointSuccess(item: WorkItem, outputJson: String, nextStep: String?)
+  suspend fun checkpointFiltered(item: WorkItem, reason: String)
+  suspend fun checkpointFailure(item: WorkItem, errorJson: String, retryAt: Instant?)
 
   // Backpressure — count of non-terminal items for the ingestion loop
   suspend fun countNonTerminal(runId: String): Int
 
   // Lease reclaim — resets expired IN_PROGRESS items to PENDING
-  suspend fun reclaimExpiredLeases(nowEpochMs: Long, limit: Int): List<WorkItem>
+  // now is supplied by the caller (runtime watchdog) for deterministic expiry evaluation
+  suspend fun reclaimExpiredLeases(now: Instant, limit: Int): List<WorkItem>
 }
 ```
+
+Run lifecycle notes:
+
+- `getOrCreateRun(pipeline, planVersion, nowMs)` looks up or creates a run keyed by `(pipeline, planVersion)`. Calling it with the same pipeline name and plan version returns the existing active run. Bumping `planVersion` creates a new long-lived run with a fresh run id while older runs remain in the store. Callers must bump `planVersion` when making changes that are incompatible with existing work items (e.g. step payload schema changes, pipeline topology rewrites). Active-run queries and restart recovery use `(pipeline, planVersion)` together with `status` to identify which run to resume.
 
 Contract rules:
 
@@ -194,6 +199,13 @@ Required entity families:
 - run id, pipeline name, plan version
 - status and timestamps
 
+V1 run-level status values:
+
+- `ACTIVE` — run is healthy and available for ingestion and execution. The normal lifetime state for an `INFINITE` run.
+- `FAILED` — run is permanently unusable due to an unrecoverable condition; excluded from `listActiveRuns` and the active-run Postgres index (`idx_runs_active`).
+
+For `INFINITE` pipelines, runs do not have a `COMPLETED` status. A run typically remains `ACTIVE` for its entire lifetime. `FAILED` is reserved for conditions that prevent any further progress on the run (e.g. unrecoverable store failure or administrative decommission). Items within the run are individually terminal (`COMPLETED`, `FILTERED`, `FAILED`); the run status is a coarse run-level health indicator only.
+
 #### WorkItem minimum fields
 
 - item id, run id, source id (for deduplication)
@@ -203,8 +215,8 @@ Required entity families:
 - `lastErrorJson: String?` — set on `FAILED`, null otherwise
 - `attemptCount: Int` — incremented on every checkpoint call
 - `leaseOwner: String?` — worker id holding the current lease
-- `leaseExpiryMs: Long?` — epoch ms at which the lease expires
-- `retryAtMs: Long?` — epoch ms before which a failed item must not be retried
+- `leaseExpiry: Instant?` — instant at which the lease expires
+- `retryAt: Instant?` — instant before which a failed item must not be retried
 
 ---
 

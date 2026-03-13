@@ -208,13 +208,3 @@ sealed class CoreFailure : ItemFailure {
  * - [FAILED]: Step failed (fatal or max retries); terminal.
  */
 enum class WorkItemStatus { PENDING, IN_PROGRESS, COMPLETED, FILTERED, FAILED }
-
-// ── Store operation results ───────────────────────────────────────────────────
-
-/**
- * Result of appending an ingress record to the store.
- *
- * - [APPENDED]: Record was inserted.
- * - [DUPLICATE]: A record with the same (runId, sourceId) already existed; idempotent no-op.
- */
-enum class AppendIngressResult { APPENDED, DUPLICATE }

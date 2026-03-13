@@ -5,8 +5,8 @@ Project skills live in Cursor Skill files so Codex and Cursor read the same sour
 This file lists project-local skill entry points only (no duplicates, no copied skill bodies).
 
 ### Local skills (canonical)
-- pkt-core: Core authoring and review guidance for the Kotlin Multiplatform `pipekt` library (pipelines, operators, contracts, and compatibility).
-  - file: `.cursor/skills/pkt-core/SKILL.md`
+- pkt-code: Core authoring and review guidance for the Kotlin Multiplatform `pipekt` library (pipelines, operators, contracts, and compatibility).
+  - file: `.cursor/skills/pkt-code/SKILL.md`
 - pkt-tests: Testing standards for behavior changes in `pipekt`, including operator and pipeline contract coverage.
   - file: `.cursor/skills/pkt-tests/SKILL.md`
 - pkt-plans: Rules for updating design docs in `plans/` and keeping implementation notes aligned with code changes.

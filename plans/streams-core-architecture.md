@@ -233,7 +233,7 @@ The following separations are mandatory:
 - `payload_json` is nullable; it must be nulled at the terminal checkpoint for `COMPLETED`, `FILTERED`, and `FAILED` items — this is an engine invariant, not optional.
 - `resumeRuns` must call `reclaimExpiredLeases` before re-executing any active run.
 - Adapter code may be JVM-specific; core contracts must remain free of JVM-only transport concerns.
-- The run is long-lived and never transitions to a terminal state; items are individually terminal.
+- The run is long-lived and never transitions to a terminal state; items are individually terminal. Run-level `status` is a coarse health indicator (`ACTIVE` for the normal lifetime state, `FAILED` for unrecoverable conditions). `INFINITE` runs do not have a `COMPLETED` status. For the full status set and `(pipeline, planVersion)` lookup semantics, see `streams-contracts-v1.md`.
 
 ---
 
