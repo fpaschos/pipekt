@@ -16,9 +16,9 @@
 - [x] WorkItemStatus remains in core; store depends on core for IngressRecord and WorkItemStatus
 - [x] Removed AppendIngressResult enum from core in favor of store's bulk result type
 
-### Phase 1C — InMemoryStore + FakeSourceAdapter (not started)
+### Phase 1C — InMemoryStore + FakeSourceAdapter (complete)
 
-### Phase 1D — InMemoryRuntime + happy-path tests (not started)
+### Phase 1D — PipelineRuntime + happy-path tests (complete)
 
 ---
 
@@ -293,6 +293,7 @@ Integrate the validated `streams` library into the actual service composition mo
 
 ### Scope
 
+- **pipeline registry/manager** (`PipelineManager`): a central component that owns one `PipelineRuntime` per registered `PipelineDefinition`, providing `startPipeline`, `stopPipeline`, `listPipelines`, and `getRuntime` operations. Specified in `streams-technical-requirements.md`; implemented in this layer, not in `pipekt` commonMain.
 - lifecycle ownership for 3-5 concurrent pipelines per service instance
 - DI wiring
 - tracing/context propagation bridges

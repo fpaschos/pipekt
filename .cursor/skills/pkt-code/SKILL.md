@@ -33,6 +33,15 @@ Use this skill when creating or validating **library code** in pipekt across Kot
 - Preserve binary and source compatibility unless the user explicitly requests a breaking change.
 - Keep data flow predictable; avoid hidden state in operators.
 
+## Time and Duration
+
+- **Never use `Long` for time values or intervals.** Always use `kotlin.time` types:
+  - Timestamps and instants: `kotlin.time.Instant` (via `Clock.System.now()`)
+  - Durations and intervals: `kotlin.time.Duration` (e.g. `10.milliseconds`, `30.seconds`, `5.minutes`)
+  - Time sources: `kotlin.time.Clock` — never `System.currentTimeMillis()` or `System.nanoTime()`
+- This applies to all public API parameters, return types, and data class fields. `Long`-epoch fields (e.g. `startedAt: Long`) that already exist in the codebase must not be widened without an explicit task to migrate them.
+- `delay(Duration)` is preferred over `delay(Long)` in coroutines.
+
 ## Documentation (code-level)
 
 - **KDoc at production quality:** All public types, functions, parameters, and return values in `commonMain` and platform source sets must have KDoc covering purpose, contract/usage where relevant, parameters, and returns.

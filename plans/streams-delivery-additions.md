@@ -44,7 +44,7 @@ Fix immediately, before any real step implementation is attempted. This is a pre
 
 ### Problem
 
-`RetryPolicy.backoffMs` exists as a field but is never used in `InMemoryRuntime.executeStep`. All retry attempts run back-to-back with zero delay between them. For a transient downstream failure (e.g. a briefly unavailable REST API), all `maxAttempts` exhaust instantly against the same failure condition.
+`RetryPolicy.backoffMs` exists as a field but is never used in `PipelineRuntime.executeStep`. All retry attempts run back-to-back with zero delay between them. For a transient downstream failure (e.g. a briefly unavailable REST API), all `maxAttempts` exhaust instantly against the same failure condition.
 
 ### Fix
 
@@ -603,6 +603,19 @@ The kt-framework lifecycle (Phase 6) owns the SIGTERM hook and calls the runtime
 ### Phase
 
 Phase 6 (kt-framework integration, where lifecycle hooks are available).
+
+---
+
+## Production default overrides
+
+The following runtime knobs must be overridden from their code defaults when wiring for production. Code defaults are intentionally small (test-friendly); shipping them unchanged will cause unnecessary DB polling pressure or slow lease reclaim. See `streams-technical-requirements.md` for the full table of ranges.
+
+| Knob | Code default | Minimum production override |
+| --- | --- | --- |
+| `watchdogInterval` | 50 ms | 1–5 s |
+| `workerPollInterval` | 10 ms | 100–500 ms (or adaptive backoff when `claim` empty) |
+| `leaseDuration` | 30 s | 30–60 s (increase for long-running steps) |
+| Claim `limit` (per worker poll) | 10 | 10–64; 50–200 for high throughput |
 
 ---
 
