@@ -1,10 +1,12 @@
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.ksp)
 }
 
 kotlin {
     jvm()
+    macosArm64()
 
     compilerOptions {
         freeCompilerArgs.add("-opt-in=kotlin.uuid.ExperimentalUuidApi")
@@ -34,4 +36,8 @@ kotlin {
             implementation(libs.kotest.runner.junit5)
         }
     }
+}
+
+dependencies {
+    add("kspMacosArm64Test", libs.kotest.symbol.processor)
 }
