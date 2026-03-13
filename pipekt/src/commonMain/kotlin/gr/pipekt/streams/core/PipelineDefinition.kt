@@ -1,4 +1,4 @@
-package io.github.fpaschos.pipekt.core
+package gr.pipekt.streams.core
 
 import arrow.core.Either
 import arrow.core.left
@@ -10,27 +10,17 @@ data class PipelineDefinition(
     val name: String,
     val source: SourceDef<*>,
     val operators: List<OperatorDef>,
+    val maxInFlight: Int,
+    val retentionDays: Int = 30,
 )
 
 // ── Validation errors ─────────────────────────────────────────────────────────
 
 sealed class PipelineValidationError {
-    data class DuplicateStepName(
-        val name: String,
-    ) : PipelineValidationError()
-
-    data class MultipleFinalizersFound(
-        val names: List<String>,
-    ) : PipelineValidationError()
-
-    data class BarrierWithNoFinitePredecessor(
-        val barrierName: String,
-        val predecessorStep: String,
-    ) : PipelineValidationError()
-
+    data class DuplicateStepName(val name: String) : PipelineValidationError()
     data object NoSourceDefined : PipelineValidationError()
-
     data object EmptyPipeline : PipelineValidationError()
+    data object InvalidMaxInFlight : PipelineValidationError()
 }
 
 // ── Validation logic ──────────────────────────────────────────────────────────
@@ -39,39 +29,30 @@ fun validate(
     name: String,
     source: SourceDef<*>?,
     operators: List<OperatorDef>,
+    maxInFlight: Int,
+    retentionDays: Int = 30,
 ): Either<List<PipelineValidationError>, PipelineDefinition> {
     val errors = mutableListOf<PipelineValidationError>()
 
     if (source == null) errors += PipelineValidationError.NoSourceDefined
     if (operators.isEmpty()) errors += PipelineValidationError.EmptyPipeline
+    if (maxInFlight <= 0) errors += PipelineValidationError.InvalidMaxInFlight
 
-    val allNames =
-        buildList {
-            source?.let { add(it.name) }
-            addAll(operators.map { it.name })
-        }
-
-    val duplicates = allNames.groupBy { it }.filter { it.value.size > 1 }.keys
-    duplicates.forEach { errors += PipelineValidationError.DuplicateStepName(it) }
-
-    val finalizers = operators.filterIsInstance<FinalizerDef<*, *>>()
-    if (finalizers.size > 1) {
-        errors += PipelineValidationError.MultipleFinalizersFound(finalizers.map { it.name })
+    val allNames = buildList {
+        source?.let { add(it.name) }
+        addAll(operators.map { it.name })
     }
-
-    val stepNames = operators.map { it.name }.toSet()
-    operators.filterIsInstance<BarrierDef>().forEach { barrier ->
-        if (barrier.predecessorStep !in stepNames) {
-            errors +=
-                PipelineValidationError.BarrierWithNoFinitePredecessor(
-                    barrierName = barrier.name,
-                    predecessorStep = barrier.predecessorStep,
-                )
-        }
-    }
+    allNames.groupBy { it }.filter { it.value.size > 1 }.keys
+        .forEach { errors += PipelineValidationError.DuplicateStepName(it) }
 
     return if (errors.isEmpty() && source != null) {
-        PipelineDefinition(name = name, source = source, operators = operators).right()
+        PipelineDefinition(
+            name = name,
+            source = source,
+            operators = operators,
+            maxInFlight = maxInFlight,
+            retentionDays = retentionDays,
+        ).right()
     } else {
         errors.left()
     }
@@ -81,6 +62,8 @@ fun validate(
 
 class PipelineBuilder<T>(
     private val name: String,
+    private val maxInFlight: Int,
+    private val retentionDays: Int = 30,
 ) {
     private var source: SourceDef<T>? = null
     private val operators = mutableListOf<OperatorDef>()
@@ -109,12 +92,11 @@ class PipelineBuilder<T>(
         predicate: StepFn<T, Boolean, E>,
     ): PipelineBuilder<T> {
         @Suppress("UNCHECKED_CAST")
-        operators +=
-            FilterDef(
-                name = name,
-                filteredReason = filteredReason,
-                predicate = predicate as StepFn<Any?, Boolean, Any?>,
-            )
+        operators += FilterDef(
+            name = name,
+            filteredReason = filteredReason,
+            predicate = predicate as StepFn<Any?, Boolean, Any?>,
+        )
         return this
     }
 
@@ -123,27 +105,22 @@ class PipelineBuilder<T>(
         return this
     }
 
-    fun barrier(
-        name: String,
-        predecessorStep: String,
-    ): PipelineBuilder<T> {
-        operators += BarrierDef(name = name, predecessorStep = predecessorStep)
-        return this
-    }
-
-    fun <E> finalizer(
-        name: String,
-        fn: StepFn<List<T>, Unit, E>,
-    ): PipelineBuilder<T> {
-        @Suppress("UNCHECKED_CAST")
-        operators += FinalizerDef(name = name, fn = fn as StepFn<List<Any?>, Unit, Any?>)
-        return this
-    }
-
-    fun build(): Either<List<PipelineValidationError>, PipelineDefinition> = validate(name = name, source = source, operators = operators)
+    fun build(): Either<List<PipelineValidationError>, PipelineDefinition> =
+        validate(
+            name = name,
+            source = source,
+            operators = operators,
+            maxInFlight = maxInFlight,
+            retentionDays = retentionDays,
+        )
 }
 
 fun <T> pipeline(
     name: String,
+    maxInFlight: Int,
+    retentionDays: Int = 30,
     block: PipelineBuilder<T>.() -> Unit,
-): Either<List<PipelineValidationError>, PipelineDefinition> = PipelineBuilder<T>(name).apply(block).build()
+): Either<List<PipelineValidationError>, PipelineDefinition> =
+    PipelineBuilder<T>(name = name, maxInFlight = maxInFlight, retentionDays = retentionDays)
+        .apply(block)
+        .build()

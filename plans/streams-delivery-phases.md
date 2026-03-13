@@ -1,5 +1,24 @@
 # Streams Delivery Phases
 
+## Implementation Status
+
+### Phase 1A — DSL + Validation (complete)
+- [x] core types (StepCtx, StepFn, RetryPolicy, FilteredReason, ItemFailure)
+- [x] operator definitions (SourceDef, StepDef, FilterDef, PersistEachDef)
+- [x] SourceAdapter contract
+- [x] PayloadSerializer interface + KotlinxPayloadSerializer
+- [x] Clock.kt (commonMain) + Clock.jvm.kt (jvmMain)
+- [x] PipelineDefinition + validate() + DSL builder
+- [x] PipelineDefinitionTest + PipelineOperatorsTest passing
+
+### Phase 1B — Store SPI + Entities (not started)
+
+### Phase 1C — InMemoryStore + FakeSourceAdapter (not started)
+
+### Phase 1D — InMemoryRuntime + happy-path tests (not started)
+
+---
+
 ## Summary
 
 This document turns the `streams` architecture into an implementation sequence. The order is designed to validate contracts early, keep the loyalty example anchored to generic APIs, and postpone kt-framework integration until the core library is proven.

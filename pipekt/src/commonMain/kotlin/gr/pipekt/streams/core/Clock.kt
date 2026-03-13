@@ -1,4 +1,4 @@
-package io.github.fpaschos.pipekt.core
+package gr.pipekt.streams.core
 
 fun interface Clock {
     fun nowMs(): Long
