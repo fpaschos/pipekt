@@ -115,7 +115,7 @@ These three loops run concurrently and are independent of each other.
 
 ### Payload Serializer
 
-The engine must not hardcode a serialization library. `PayloadSerializer` is the serialization boundary in `streams.core`:
+The engine must not hardcode a serialization library. `PayloadSerializer` is the serialization boundary in `pipekt.core`:
 
 ```kotlin
 interface PayloadSerializer {
@@ -291,5 +291,5 @@ These contracts are acceptable only if they allow:
 - a restart-safe Postgres implementation later
 - a loyalty example pipeline with continuous ingress, per-item work, and a sequential phase (`INFINITE` mode)
 - the ingestion loop to pause automatically when `countNonTerminal >= maxInFlight` without any step-author involvement
-- zero dependency from `streams.core` on kt framework or RabbitMQ classes
+- zero dependency from `pipekt.core` on kt framework or RabbitMQ classes
 - zero requirement for a public physical-planning API in the MVP

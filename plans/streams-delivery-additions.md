@@ -562,7 +562,7 @@ Hardcoding `kotlinx.serialization` inside the engine couples every user of the l
 
 ### Fix
 
-Define a `PayloadSerializer` interface in `streams.core`:
+Define a `PayloadSerializer` interface in `pipekt.core`:
 
 ```kotlin
 interface PayloadSerializer {
@@ -577,7 +577,7 @@ The engine holds a `PayloadSerializer` reference and calls it when writing or re
 
 ### Phase
 
-Phase 1 — interface in `streams.core` alongside the other core contracts.
+Phase 1 — interface in `pipekt.core` alongside the other core contracts.
 
 ---
 
@@ -623,5 +623,5 @@ Phase 6 (kt-framework integration, where lifecycle hooks are available).
 | 11. `attempts` table removed from MVP | Architecture | Phase 1 (remove from SPI) |
 | 12. True backpressure via `maxInFlight` | Architecture | Phase 1 (interface stub) / Phase 2 (implementation) |
 | 13. Adapter-level pre-filter for high-discard flows | Design Note | Phase 4 / Phase 5 (guidance) |
-| 14. `PayloadSerializer` abstraction | Architecture | Phase 1 (interface in `streams.core`) |
+| 14. `PayloadSerializer` abstraction | Architecture | Phase 1 (interface in `pipekt.core`) |
 | 15. Graceful shutdown | Operations | Phase 6 |

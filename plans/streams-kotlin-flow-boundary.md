@@ -26,11 +26,11 @@ The step-2 worker loop does not receive items from the step-1 worker loop. It in
 
 | Layer | Use Flow? | Reason |
 | --- | --- | --- |
-| `streams.core` contracts | No | Contracts must be transport and runtime agnostic |
-| `streams.store` | No | Store is the source of truth; no stream abstraction needed |
-| `streams.runtime` worker loops | No | Independent `while (isActive)` loops reading from store |
-| `streams.runtime` ingestion loop | No | `countNonTerminal` check must happen before every poll; not expressible as a Flow operator chain |
-| `streams.adapters.amqp` (internal) | Yes — Phase 4 | AMQP channel consumption is naturally a `Flow`; used as an internal implementation detail only; the public `SourceAdapter` contract stays as `poll/ack/nack` lists |
+| `pipekt.core` contracts | No | Contracts must be transport and runtime agnostic |
+| `pipekt.store` | No | Store is the source of truth; no stream abstraction needed |
+| `pipekt.runtime` worker loops | No | Independent `while (isActive)` loops reading from store |
+| `pipekt.runtime` ingestion loop | No | `countNonTerminal` check must happen before every poll; not expressible as a Flow operator chain |
+| `pipekt.adapters.amqp` (internal) | Yes — Phase 4 | AMQP channel consumption is naturally a `Flow`; used as an internal implementation detail only; the public `SourceAdapter` contract stays as `poll/ack/nack` lists |
 | Phase 6 metrics / `pipekit tail` | Yes — Phase 6 | `SharedFlow` / `StateFlow` for hot event broadcasting to health endpoint, Micrometer, and CLI |
 | Phase 6 watchdog ticker | Yes — Phase 6 | Ticker flow is a natural fit for the periodic `reclaimExpiredLeases` call |
 
@@ -38,6 +38,6 @@ The step-2 worker loop does not receive items from the step-1 worker loop. It in
 
 ## Rule
 
-Public contracts in `streams.core`, `streams.store`, `streams.runtime`, and `streams.adapters` must not reference any Kotlin Flow type (`Flow`, `SharedFlow`, `StateFlow`, `Channel`, or any `kotlinx.coroutines.flow` type).
+Public contracts in `pipekt.core`, `pipekt.store`, `pipekt.runtime`, and `pipekt.adapters` must not reference any Kotlin Flow type (`Flow`, `SharedFlow`, `StateFlow`, `Channel`, or any `kotlinx.coroutines.flow` type).
 
 Flow is an implementation detail of specific adapter and framework integration layers, never a public engine contract.

@@ -5,7 +5,7 @@
 This document defines the boundary between:
 
 - the current `pipekt` implementation, which is legacy reference only
-- the new `gr.pipekt.streams` library, which will be built in parallel
+- the new `io.github.fpaschos.pipekt` library, which will be built in parallel
 
 The current code must not be used as the architectural baseline for the new library. It is useful only as a transport-behavior reference.
 
@@ -91,16 +91,16 @@ These are adapter concerns, not core engine concerns.
 
 The new library starts under:
 
-- `gr.pipekt.streams.core`
-- `gr.pipekt.streams.runtime`
-- `gr.pipekt.streams.store`
-- `gr.pipekt.streams.adapters.amqp`
-- `gr.pipekt.streams.examples.loyalty`
+- `io.github.fpaschos.pipekt.core`
+- `io.github.fpaschos.pipekt.runtime`
+- `io.github.fpaschos.pipekt.store`
+- `io.github.fpaschos.pipekt.adapters.amqp`
+- `io.github.fpaschos.pipekt.examples.loyalty`
 
 Rules for this boundary:
 
-1. `streams.core` must not depend on kt framework.
-2. `streams.runtime` must remain framework-agnostic.
+1. `pipekt.core` must not depend on kt framework.
+2. `pipekt.runtime` must remain framework-agnostic.
 3. adapters may depend on JVM-only infrastructure.
 4. loyalty example code validates the generic API, but does not define it.
 5. legacy `ampq` code remains untouched until the new library is ready for integration.
@@ -124,9 +124,9 @@ This prevents framework lifecycle, DI, tracing, and request-context concerns fro
 | RabbitMQ topology knowledge | Exists in legacy code | Keep as adapter reference |
 | Publisher channel pooling | Exists in legacy code | Keep as adapter design input |
 | Sequential consumer loop | Exists in legacy code | Keep as transport behavior reference |
-| Generic pipeline DSL | Missing | Build in `streams.core` |
-| Durable runtime | Missing | Build in `streams.runtime` |
-| Durable store SPI | Missing | Build in `streams.store` |
+| Generic pipeline DSL | Missing | Build in `pipekt.core` |
+| Durable runtime | Missing | Build in `pipekt.runtime` |
+| Durable store SPI | Missing | Build in `pipekt.store` |
 | Postgres store | Missing | Defer to delivery phase 3 |
 | AMQP source adapter for new engine | Missing | Build after core/store contracts |
 | Loyalty workflow on generic engine | Missing | Build after runtime and store contracts |
@@ -135,6 +135,6 @@ This prevents framework lifecycle, DI, tracing, and request-context concerns fro
 ## Consequences For Implementation
 
 - The first code written under `streams` must define engine contracts, not RabbitMQ behavior.
-- No public type in `streams.core` may depend on `ExecContext`, Koin, or current application wiring.
+- No public type in `pipekt.core` may depend on `ExecContext`, Koin, or current application wiring.
 - AMQP work must happen behind a source adapter boundary.
 - Any migration from legacy code happens only after the new core runtime and loyalty example exist.

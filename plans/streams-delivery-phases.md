@@ -35,13 +35,13 @@ Create the minimum runnable `streams` engine with no external infrastructure dep
 
 ### Scope
 
-- define `streams.core` contracts
-- define `streams.store` SPI with atomic checkpoint operations
+- define `pipekt.core` contracts
+- define `pipekt.store` SPI with atomic checkpoint operations
 - `WorkItem` entity must carry: `leaseOwner`, `leaseExpiryMs`, `retryAtMs`, `attemptCount`, `lastErrorJson`, nullable `payloadJson`
 - `StepFn` must be `suspend`
 - `StepCtx` must carry: `pipelineName`, `runId`, `itemId`, `itemKey`, `stepName`, `attempt`, `startedAt`, `metadata`
 - `PipelineDefinition` must carry `retentionDays: Int` (default 30) — archival job reads this per-pipeline cutoff
-- define `PayloadSerializer` interface in `streams.core` — engine-level serialization boundary; default implementation uses `kotlinx.serialization`; swappable for KMP targets
+- define `PayloadSerializer` interface in `pipekt.core` — engine-level serialization boundary; default implementation uses `kotlinx.serialization`; swappable for KMP targets
 - build an in-memory fake store
 - build a fake source adapter
 - validate pipeline definition and operator ordering
@@ -62,7 +62,7 @@ Create the minimum runnable `streams` engine with no external infrastructure dep
 - `DurableStore` interface matches the v1 contracts exactly (atomic checkpoints, bulk `appendIngress`, `claim` with lease params, `reclaimExpiredLeases`, `countNonTerminal`)
 - no `AttemptRecord` / `attempts` table in the store SPI or entities
 - `PipelineDefinition` carries `retentionDays: Int` (default 30)
-- `PayloadSerializer` interface exists in `streams.core` with a default `kotlinx.serialization` implementation
+- `PayloadSerializer` interface exists in `pipekt.core` with a default `kotlinx.serialization` implementation
 
 ### Deferred
 
@@ -217,7 +217,7 @@ Connect RabbitMQ to the generic source contract without changing core engine con
 
 ### Scope
 
-- implement `streams.adapters.amqp`
+- implement `pipekt.adapters.amqp`
 - map RabbitMQ messages to `SourceRecord<T>`
 - enforce durable append before ack (bulk: poll batch → `appendIngress(batch)` → ack batch)
 - carry broker metadata only at adapter level

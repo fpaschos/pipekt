@@ -1,4 +1,4 @@
-package gr.pipekt.streams.core
+package io.github.fpaschos.pipekt.core
 
 sealed class OperatorDef {
     abstract val name: String

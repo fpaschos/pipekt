@@ -1,4 +1,4 @@
-package gr.pipekt.streams.core
+package io.github.fpaschos.pipekt.core
 
 import arrow.core.Either
 import arrow.core.left
@@ -17,9 +17,14 @@ data class PipelineDefinition(
 // ── Validation errors ─────────────────────────────────────────────────────────
 
 sealed class PipelineValidationError {
-    data class DuplicateStepName(val name: String) : PipelineValidationError()
+    data class DuplicateStepName(
+        val name: String,
+    ) : PipelineValidationError()
+
     data object NoSourceDefined : PipelineValidationError()
+
     data object EmptyPipeline : PipelineValidationError()
+
     data object InvalidMaxInFlight : PipelineValidationError()
 }
 
@@ -38,11 +43,15 @@ fun validate(
     if (operators.isEmpty()) errors += PipelineValidationError.EmptyPipeline
     if (maxInFlight <= 0) errors += PipelineValidationError.InvalidMaxInFlight
 
-    val allNames = buildList {
-        source?.let { add(it.name) }
-        addAll(operators.map { it.name })
-    }
-    allNames.groupBy { it }.filter { it.value.size > 1 }.keys
+    val allNames =
+        buildList {
+            source?.let { add(it.name) }
+            addAll(operators.map { it.name })
+        }
+    allNames
+        .groupBy { it }
+        .filter { it.value.size > 1 }
+        .keys
         .forEach { errors += PipelineValidationError.DuplicateStepName(it) }
 
     return if (errors.isEmpty() && source != null) {
@@ -92,11 +101,12 @@ class PipelineBuilder<T>(
         predicate: StepFn<T, Boolean, E>,
     ): PipelineBuilder<T> {
         @Suppress("UNCHECKED_CAST")
-        operators += FilterDef(
-            name = name,
-            filteredReason = filteredReason,
-            predicate = predicate as StepFn<Any?, Boolean, Any?>,
-        )
+        operators +=
+            FilterDef(
+                name = name,
+                filteredReason = filteredReason,
+                predicate = predicate as StepFn<Any?, Boolean, Any?>,
+            )
         return this
     }
 

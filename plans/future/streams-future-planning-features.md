@@ -2,7 +2,7 @@
 
 ## Summary
 
-This document captures planning ideas that are intentionally outside the current MVP for `gr.pipekt.streams`.
+This document captures planning ideas that are intentionally outside the current MVP for `io.github.fpaschos.pipekt`.
 
 The purpose is to preserve useful future direction without contaminating the initial design with premature complexity.
 

@@ -54,7 +54,7 @@ The Temporal comparison is useful for explaining the engine to engineers familia
 
 ## Package Layout
 
-### `gr.pipekt.streams.core`
+### `io.github.fpaschos.pipekt.core`
 
 Responsibilities:
 
@@ -72,7 +72,7 @@ Must not depend on:
 - Koin
 - kt framework runtime types
 
-### `gr.pipekt.streams.runtime`
+### `io.github.fpaschos.pipekt.runtime`
 
 Responsibilities:
 
@@ -87,10 +87,10 @@ Responsibilities:
 
 Depends on:
 
-- `streams.core`
-- `streams.store`
+- `pipekt.core`
+- `pipekt.store`
 
-### `gr.pipekt.streams.store`
+### `io.github.fpaschos.pipekt.store`
 
 Responsibilities:
 
@@ -104,7 +104,7 @@ Initial design target:
 - interface-only in the core planning pass
 - Postgres implementation later in a JVM-specific package or subtree
 
-### `gr.pipekt.streams.adapters.amqp`
+### `io.github.fpaschos.pipekt.adapters.amqp`
 
 Responsibilities:
 
@@ -115,7 +115,7 @@ Responsibilities:
 
 This package must not become the engine entrypoint. It is an adapter only.
 
-### `gr.pipekt.streams.examples.loyalty`
+### `io.github.fpaschos.pipekt.examples.loyalty`
 
 Responsibilities:
 
@@ -262,10 +262,10 @@ The following are explicitly out of scope for the first pass:
 
 ## Consequences For Implementation
 
-- `streams.core` is implemented first.
-- `streams.core` produces a validated definition, not a physical execution tree.
-- `streams.runtime` must consume generic source/store contracts rather than RabbitMQ handlers.
-- `streams.runtime` may compile definitions into an internal executable plan, but that plan stays a runtime implementation detail in v1.
-- `streams.runtime` runs three independent coroutine loops: ingestion, per-step workers, and watchdog.
-- `streams.adapters.amqp` adapts RabbitMQ into ingress records and ack behavior only.
+- `pipekt.core` is implemented first.
+- `pipekt.core` produces a validated definition, not a physical execution tree.
+- `pipekt.runtime` must consume generic source/store contracts rather than RabbitMQ handlers.
+- `pipekt.runtime` may compile definitions into an internal executable plan, but that plan stays a runtime implementation detail in v1.
+- `pipekt.runtime` runs three independent coroutine loops: ingestion, per-step workers, and watchdog.
+- `pipekt.adapters.amqp` adapts RabbitMQ into ingress records and ack behavior only.
 - kt framework gets a separate integration document and package later, after the loyalty example proves the API shape.

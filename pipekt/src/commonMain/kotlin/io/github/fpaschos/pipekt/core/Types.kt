@@ -1,4 +1,4 @@
-package gr.pipekt.streams.core
+package io.github.fpaschos.pipekt.core
 
 import arrow.core.raise.Raise
 import kotlin.uuid.ExperimentalUuidApi
@@ -48,10 +48,22 @@ data class RetryPolicy(
 enum class FilteredReason { BELOW_THRESHOLD, DUPLICATE, EXCLUDED }
 
 sealed class ItemFailure {
-    data class Filtered(val reason: FilteredReason) : ItemFailure()
-    data class Retryable(val cause: String, val attemptNumber: Int) : ItemFailure()
-    data class Fatal(val cause: String) : ItemFailure()
-    data class InfrastructureFailure(val cause: String) : ItemFailure()
+    data class Filtered(
+        val reason: FilteredReason,
+    ) : ItemFailure()
+
+    data class Retryable(
+        val cause: String,
+        val attemptNumber: Int,
+    ) : ItemFailure()
+
+    data class Fatal(
+        val cause: String,
+    ) : ItemFailure()
+
+    data class InfrastructureFailure(
+        val cause: String,
+    ) : ItemFailure()
 }
 
 // ── Work item status ──────────────────────────────────────────────────────────

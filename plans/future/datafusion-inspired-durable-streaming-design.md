@@ -7,7 +7,7 @@
 This document extends (does not replace) the durable pipeline plan in
 `archive/durable-pipeline-implementation-plan.md`.
 
-It is now explicitly outside the current MVP scope for `gr.pipekt.streams`.
+It is now explicitly outside the current MVP scope for `io.github.fpaschos.pipekt`.
 
 Goal:
 

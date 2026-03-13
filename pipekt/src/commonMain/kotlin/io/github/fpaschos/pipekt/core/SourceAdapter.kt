@@ -1,9 +1,12 @@
-package gr.pipekt.streams.core
+package io.github.fpaschos.pipekt.core
 
 interface SourceAdapter<T> {
     suspend fun poll(maxItems: Int): List<SourceRecord<T>>
 
     suspend fun ack(records: List<SourceRecord<T>>)
 
-    suspend fun nack(records: List<SourceRecord<T>>, retry: Boolean)
+    suspend fun nack(
+        records: List<SourceRecord<T>>,
+        retry: Boolean,
+    )
 }

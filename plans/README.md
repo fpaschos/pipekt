@@ -29,7 +29,7 @@ Ideas intentionally outside the current MVP:
 
 ## Current Direction
 
-- Build the new library under `gr.pipekt.streams`
+- Build the new library under `io.github.fpaschos.pipekt`
 - V1 supports **INFINITE pipelines only** — continuous ingress, no batch boundary, no barrier, no finalizer
 - `BOUNDED` mode (barrier, finalizer, batch ingress) is explicitly deferred to a future version
 - Treat current `ampq` code as legacy reference only
