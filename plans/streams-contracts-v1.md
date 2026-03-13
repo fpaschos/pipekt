@@ -148,26 +148,27 @@ Rules:
 ```kotlin
 interface DurableStore {
   // Run lifecycle
-  suspend fun getOrCreateRun(pipeline: String, planVersion: String, nowMs: Long): RunRecord
+  suspend fun getOrCreateRun(pipeline: String, planVersion: String): RunRecord
   suspend fun getRun(runId: String): RunRecord?
   suspend fun listActiveRuns(pipeline: String): List<RunRecord>
 
   // Ingress — bulk, idempotent
-  suspend fun appendIngress(runId: String, records: List<IngressRecord<*>>, nowMs: Long): AppendIngressResult
+  suspend fun appendIngress(runId: String, records: List<IngressRecord<*>>): AppendIngressResult
 
   // Claim — atomic SELECT FOR UPDATE SKIP LOCKED
-  suspend fun claim(step: String, runId: String, limit: Int, leaseMs: Long, workerId: String): List<WorkItem>
+  suspend fun claim(step: String, runId: String, limit: Int, leaseDuration: Duration, workerId: String): List<WorkItem>
 
   // Atomic checkpoints — each is a single transaction (attempt counter + item state)
-  suspend fun checkpointSuccess(item: WorkItem, outputJson: String, nextStep: String?, nowMs: Long)
-  suspend fun checkpointFiltered(item: WorkItem, reason: String, nowMs: Long)
-  suspend fun checkpointFailure(item: WorkItem, errorJson: String, retryAtEpochMs: Long?, nowMs: Long)
+  suspend fun checkpointSuccess(item: WorkItem, outputJson: String, nextStep: String?)
+  suspend fun checkpointFiltered(item: WorkItem, reason: String)
+  suspend fun checkpointFailure(item: WorkItem, errorJson: String, retryAt: Instant?)
 
   // Backpressure — count of non-terminal items for the ingestion loop
   suspend fun countNonTerminal(runId: String): Int
 
   // Lease reclaim — resets expired IN_PROGRESS items to PENDING
-  suspend fun reclaimExpiredLeases(nowEpochMs: Long, limit: Int): List<WorkItem>
+  // now is supplied by the caller (runtime watchdog) for deterministic expiry evaluation
+  suspend fun reclaimExpiredLeases(now: Instant, limit: Int): List<WorkItem>
 }
 ```
 
@@ -214,8 +215,8 @@ For `INFINITE` pipelines, runs do not have a `COMPLETED` status. A run typically
 - `lastErrorJson: String?` — set on `FAILED`, null otherwise
 - `attemptCount: Int` — incremented on every checkpoint call
 - `leaseOwner: String?` — worker id holding the current lease
-- `leaseExpiryMs: Long?` — epoch ms at which the lease expires
-- `retryAtMs: Long?` — epoch ms before which a failed item must not be retried
+- `leaseExpiry: Instant?` — instant at which the lease expires
+- `retryAt: Instant?` — instant before which a failed item must not be retried
 
 ---
 

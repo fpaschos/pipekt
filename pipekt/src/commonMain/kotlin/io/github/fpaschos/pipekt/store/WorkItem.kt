@@ -13,7 +13,10 @@ import kotlin.time.Instant
  * @param runId Id of the run this item belongs to.
  * @param sourceId Source-level identifier of the ingested record.
  * @param currentStep Step name the item is currently at (or was last checkpointed for).
- * @param status Current [WorkItemStatus] (e.g. PENDING, IN_PROGRESS, SUCCESS, FAILED).
+ * @param status Current [WorkItemStatus]: [WorkItemStatus.PENDING], [WorkItemStatus.IN_PROGRESS],
+ *   [WorkItemStatus.COMPLETED], [WorkItemStatus.FILTERED], or [WorkItemStatus.FAILED].
+ *   Terminal statuses are [WorkItemStatus.COMPLETED], [WorkItemStatus.FILTERED], and
+ *   [WorkItemStatus.FAILED]; [payloadJson] is nulled at the terminal checkpoint.
  * @param payloadJson Serialized payload for the current step; null at terminal checkpoint.
  * @param lastErrorJson Serialized last error, if any (e.g. after checkpointFailure).
  * @param attemptCount Number of processing attempts for the current step.

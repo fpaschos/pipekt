@@ -2,7 +2,6 @@ package io.github.fpaschos.pipekt.store
 
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldNotBeBlank
 import kotlin.time.Instant
 
@@ -33,7 +32,7 @@ class RunRecordTest :
             r.pipeline.shouldBe("p")
             r.planVersion.shouldBe("v1")
             r.status.shouldBe("ACTIVE")
-            r.createdAt.shouldNotBe(null)
-            r.updatedAt.shouldNotBe(null)
+            r.createdAt.shouldBe(createdAt)
+            r.updatedAt.shouldBe(updatedAt)
         }
     })
