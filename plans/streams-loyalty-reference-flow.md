@@ -41,36 +41,39 @@ The loyalty reference flow is an **INFINITE** pipeline:
 | sequence-id eligibility | `filter` | item |
 | download policy details | `step` | item |
 | persist details checkpoint | `persistEach` | item |
-| phase-2 external call | `step` with `concurrency = 1` | item |
+| phase-2 external call | `step` (sequential phase; concurrency limits are runtime concern in v1) | item |
 
 ---
 
 ## Reference Pipeline Shape
 
-```kotlin
-pipeline<PolicyMessage>("loyalty-policy-sync") {
-  source(amqpSource())
+DSL entry is `pipeline(name, maxInFlight, retentionDays = 30, block)`. Builder: `source(name, adapter)`, `step(name, retryPolicy?, fn)`, `filter(name, filteredReason?, predicate)`, `persistEach(name)`. No chaining; each call is a standalone statement. Returns `Either<List<PipelineValidationError>, PipelineDefinition>`.
 
-  filter<PolicyMessage, LoyaltyError>("seq-id-eligible") { msg ->
+```kotlin
+pipeline<PolicyMessage>(
+  name = "loyalty-policy-sync",
+  maxInFlight = 500,
+  retentionDays = 30,
+) {
+  source("ingress", amqpSource())
+
+  filter<PolicyMessage>("seq-id-eligible") { msg ->
     eligibilityApi.isAllowed(msg.sequenceId)
   }
 
-  step<PolicyMessage, PolicyDetails, LoyaltyError>("download-policy-details") { msg ->
+  step<PolicyMessage, PolicyDetails>("download-policy-details") { msg ->
     detailsApi.fetch(msg.policyNumber)
   }
 
   persistEach("details-checkpoint")
 
-  step<PolicyDetails, Phase2Result, LoyaltyError>(
-    "phase2-one-by-one",
-    concurrency = 1,
-  ) { details ->
+  step<PolicyDetails, Phase2Result>("phase2-one-by-one") { details ->
     phase2Api.send(details)
   }
 }
 ```
 
-This is illustrative. The core design requirement is the operator behavior, not this exact syntax.
+(Step functions use the fixed error channel `ItemFailure` via `Raise<ItemFailure>`; domain errors implement `ItemFailure`. No `concurrency` parameter in the DSL in v1; sequential phase is a separate step.) This is illustrative; the core design requirement is the operator behavior.
 
 ---
 

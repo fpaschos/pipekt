@@ -157,9 +157,9 @@ V1 uses a small compile boundary:
 - user-facing logical definition
 - contains operators, policies, and validation metadata
 
-2. `ExecutablePipeline`
-- runtime-ready form derived from a validated definition
-- contains resolved step ordering, execution metadata, and runtime wiring hints
+2. Internal executable plan (not a public API in v1)
+- runtime may derive a runtime-ready form from a validated definition (resolved step ordering, execution metadata)
+- this plan stays internal to `pipekt.runtime`; there is no public `ExecutablePipeline` type in v1
 
 This compile step is intentionally simple:
 

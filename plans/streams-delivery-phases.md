@@ -7,7 +7,7 @@
 - [x] operator definitions (SourceDef, StepDef, FilterDef, PersistEachDef)
 - [x] SourceAdapter contract
 - [x] PayloadSerializer interface + KotlinxPayloadSerializer
-- [x] PipelineDefinition + validate() + DSL builder
+- [x] PipelineDefinition + validate() + DSL builder (build() returns Either; errors: DuplicateStepName, NoSourceDefined, EmptyPipeline, InvalidMaxInFlight, TypeMismatch)
 - [x] PipelineDefinitionTest + PipelineOperatorsTest passing
 
 ### Phase 1B — Store SPI + Entities (not started)
@@ -249,7 +249,7 @@ Validate that the generic engine supports the intended loyalty workflow end to e
 
 - loyalty domain types
 - loyalty step implementations
-- INFINITE reference pipeline: `filter → step → persistEach → step(concurrency=1)` (continuous ingress, no barrier, no finalizer)
+- INFINITE reference pipeline: `filter → step → persistEach → step` (continuous ingress, no barrier, no finalizer; sequential phase is a second step — concurrency limits are a runtime concern, not in the DSL in v1)
 - acceptance tests for restart, retries, sequential phase, and reclaim
 - acceptance tests for continuous ingress and per-item completion
 - verify `payload_json` is nulled on terminal checkpoint

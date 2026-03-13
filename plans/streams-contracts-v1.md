@@ -36,9 +36,9 @@ V1 supports only `INFINITE` pipelines:
 ### Step Function
 
 ```kotlin
-typealias StepFn<I, O> =
-  suspend context(arrow.core.raise.Raise<ItemFailure>, StepCtx) (I) -> O
+typealias StepFn<I, O> = suspend context(Raise<ItemFailure>, StepCtx) (I) -> O
 ```
+(Engine uses `arrow.core.raise.Raise`; context receiver order: `Raise<ItemFailure>`, then `StepCtx`.)
 
 Rules:
 
@@ -86,8 +86,11 @@ Required responsibilities:
 
 Validation must reject:
 
-- duplicate step names
-- invalid type chain between adjacent operators
+- duplicate step names (source name and all operator names must be unique)
+- no source defined (at least one call to `source(name, adapter)` required)
+- empty pipeline (at least one step, filter, or persistEach required)
+- invalid maxInFlight (must be > 0)
+- invalid type chain between adjacent operators (each operator's input type must match the previous output; PersistEachDef and FilterDef are type-transparent)
 
 In v1, `PipelineDefinition` is a stable public concept. Any executable runtime plan derived from it may remain internal to the runtime package.
 
@@ -231,11 +234,11 @@ Rules:
 
 ## Retry And Failure Semantics
 
-Failure classes:
+Failure classes (`CoreFailure` sealed hierarchy, all implement `ItemFailure`):
 
-- `Filtered`
-- `Retryable`
 - `Fatal`
+- `Retryable`
+- `Filtered`
 - `InfrastructureFailure`
 
 Rules:
@@ -243,13 +246,12 @@ Rules:
 - `Filtered` ends item progression without marking the run as failed
 - `Retryable` schedules another attempt according to policy; `retryAtMs` is set on the item
 - `Fatal` makes the item terminal failed; `lastErrorJson` is written
-- infrastructure failures are runtime/store/adapter failures and are handled outside business `Raise<E>`
+- infrastructure failures are runtime/store/adapter failures and are handled outside business `Raise<ItemFailure>`
 
-Retry policy must define:
+Retry policy (`RetryPolicy`) defines:
 
-- max attempts
-- backoff strategy
-- optional timeout
+- max attempts (`maxAttempts`)
+- backoff delay between attempts (`backoffMs`); timeout is deferred to a future version
 
 ---
 
