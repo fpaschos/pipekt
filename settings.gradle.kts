@@ -1,5 +1,3 @@
-enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
-
-rootProject.name = "pipekt-root"
+rootProject.name = "pipekt"
 
 include("pipekt")
