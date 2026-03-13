@@ -2,7 +2,7 @@
 
 ## Summary
 
-This document defines the target architecture for the new parallel `streams` library inside `sapp-loyalty`.
+This document defines the target architecture for the new parallel `streams` library inside `pipekt`.
 
 The goal is to create a framework-agnostic durable stream-processing library that can later be integrated with kt framework, RabbitMQ, and the loyalty workflow without coupling the core engine to any of them.
 
@@ -54,7 +54,7 @@ The Temporal comparison is useful for explaining the engine to engineers familia
 
 ## Package Layout
 
-### `gr.hd360.sapp.loyalty.streams.core`
+### `gr.pipekt.streams.core`
 
 Responsibilities:
 
@@ -72,7 +72,7 @@ Must not depend on:
 - Koin
 - kt framework runtime types
 
-### `gr.hd360.sapp.loyalty.streams.runtime`
+### `gr.pipekt.streams.runtime`
 
 Responsibilities:
 
@@ -90,7 +90,7 @@ Depends on:
 - `streams.core`
 - `streams.store`
 
-### `gr.hd360.sapp.loyalty.streams.store`
+### `gr.pipekt.streams.store`
 
 Responsibilities:
 
@@ -104,7 +104,7 @@ Initial design target:
 - interface-only in the core planning pass
 - Postgres implementation later in a JVM-specific package or subtree
 
-### `gr.hd360.sapp.loyalty.streams.adapters.amqp`
+### `gr.pipekt.streams.adapters.amqp`
 
 Responsibilities:
 
@@ -115,7 +115,7 @@ Responsibilities:
 
 This package must not become the engine entrypoint. It is an adapter only.
 
-### `gr.hd360.sapp.loyalty.streams.examples.loyalty`
+### `gr.pipekt.streams.examples.loyalty`
 
 Responsibilities:
 

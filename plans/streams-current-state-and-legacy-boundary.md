@@ -4,14 +4,14 @@
 
 This document defines the boundary between:
 
-- the current `sapp-loyalty` implementation, which is legacy reference only
-- the new `gr.hd360.sapp.loyalty.streams` library, which will be built in parallel
+- the current `pipekt` implementation, which is legacy reference only
+- the new `gr.pipekt.streams` library, which will be built in parallel
 
 The current code must not be used as the architectural baseline for the new library. It is useful only as a transport-behavior reference.
 
 ## Current Repo State
 
-The current `sapp-loyalty` module contains:
+The current `pipekt` module contains:
 
 - application bootstrap and Koin wiring in `Application.kt`
 - a `LoyaltyConsumer` and `LoyaltyScheduler`
@@ -21,7 +21,7 @@ The current `sapp-loyalty` module contains:
   - `ChannelPool`
   - topology specs and message envelope helpers
 - a RabbitMQ design note in `ampq/RABBITMQ.md`
-- planning documents for a larger durable pipeline library under `sapp-loyalty/plans`
+- planning documents for a larger durable pipeline library under `pipekt/plans`
 
 What is not present yet:
 
@@ -91,11 +91,11 @@ These are adapter concerns, not core engine concerns.
 
 The new library starts under:
 
-- `gr.hd360.sapp.loyalty.streams.core`
-- `gr.hd360.sapp.loyalty.streams.runtime`
-- `gr.hd360.sapp.loyalty.streams.store`
-- `gr.hd360.sapp.loyalty.streams.adapters.amqp`
-- `gr.hd360.sapp.loyalty.streams.examples.loyalty`
+- `gr.pipekt.streams.core`
+- `gr.pipekt.streams.runtime`
+- `gr.pipekt.streams.store`
+- `gr.pipekt.streams.adapters.amqp`
+- `gr.pipekt.streams.examples.loyalty`
 
 Rules for this boundary:
 

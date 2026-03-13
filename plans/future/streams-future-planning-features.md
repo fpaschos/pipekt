@@ -2,7 +2,7 @@
 
 ## Summary
 
-This document captures planning ideas that are intentionally outside the current MVP for `gr.hd360.sapp.loyalty.streams`.
+This document captures planning ideas that are intentionally outside the current MVP for `gr.pipekt.streams`.
 
 The purpose is to preserve useful future direction without contaminating the initial design with premature complexity.
 

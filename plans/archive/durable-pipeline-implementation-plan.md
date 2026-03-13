@@ -2,7 +2,7 @@
 
 > Status: superseded as the active MVP baseline.
 >
-> This document is retained as historical context only. The current implementation baseline for `sapp-loyalty` is the `streams-*` planning set:
+> This document is retained as historical context only. The current implementation baseline for `pipekt` is the `streams-*` planning set:
 > - `streams-current-state-and-legacy-boundary.md`
 > - `streams-core-architecture.md`
 > - `streams-contracts-v1.md`
