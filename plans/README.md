@@ -9,8 +9,9 @@ These documents are the active source of truth for the new parallel `streams` li
 - [streams-contracts-v1.md](plans/streams-contracts-v1.md)
 - [streams-loyalty-reference-flow.md](plans/streams-loyalty-reference-flow.md)
 - [streams-delivery-phases.md](plans/streams-delivery-phases.md)
+- [streams-delivery-additions.md](plans/streams-delivery-additions.md)
 
-Read them in that order.
+Read them in that order. `streams-delivery-additions.md` supplements `streams-delivery-phases.md` with critical fixes, architecture decisions, and the Postgres schema reference — read it alongside or immediately after the phases doc.
 
 ## Folder Layout
 
@@ -24,15 +25,6 @@ Ideas intentionally outside the current MVP:
 
 - [datafusion-inspired-durable-streaming-design.md](plans/future/datafusion-inspired-durable-streaming-design.md)
 - [streams-future-planning-features.md](plans/future/streams-future-planning-features.md)
-
-### `archive/`
-
-Historical plans that are no longer the active baseline.
-
-Keep them only for context. Do not use them as the implementation source of truth.
-
-- [durable-pipeline-implementation-plan.md](plans/archive/durable-pipeline-implementation-plan.md)
-- [mvp-experiment-implementation-plan.md](plans/archive/mvp-experiment-implementation-plan.md)
 
 ## Current Direction
 
