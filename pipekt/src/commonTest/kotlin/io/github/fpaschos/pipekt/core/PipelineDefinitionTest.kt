@@ -20,7 +20,7 @@ class PipelineDefinitionTest :
 
         test("valid pipeline builds successfully") {
             val result =
-                pipeline<String>("test-pipeline", maxInFlight = 100) {
+                pipeline("test-pipeline", maxInFlight = 100) {
                     source("src", fakeAdapter())
                     step<String, String>("step1") { it }
                 }
@@ -32,7 +32,7 @@ class PipelineDefinitionTest :
 
         test("retentionDays defaults to 30") {
             val result =
-                pipeline<String>("default-retention", maxInFlight = 10) {
+                pipeline("default-retention", maxInFlight = 10) {
                     source("src", fakeAdapter())
                     step<String, String>("step1") { it }
                 }
@@ -41,7 +41,7 @@ class PipelineDefinitionTest :
 
         test("retentionDays can be overridden") {
             val result =
-                pipeline<String>("custom-retention", maxInFlight = 10, retentionDays = 7) {
+                pipeline("custom-retention", maxInFlight = 10, retentionDays = 7) {
                     source("src", fakeAdapter())
                     step<String, String>("step1") { it }
                 }
@@ -50,7 +50,7 @@ class PipelineDefinitionTest :
 
         test("duplicate step names are rejected") {
             val result =
-                pipeline<String>("dupe-test", maxInFlight = 10) {
+                pipeline("dupe-test", maxInFlight = 10) {
                     source("src", fakeAdapter())
                     step<String, String>("duplicate") { it }
                     step<String, String>("duplicate") { it }
@@ -64,7 +64,7 @@ class PipelineDefinitionTest :
 
         test("source name clashing with step name is rejected") {
             val result =
-                pipeline<String>("clash-test", maxInFlight = 10) {
+                pipeline("clash-test", maxInFlight = 10) {
                     source("shared-name", fakeAdapter())
                     step<String, String>("shared-name") { it }
                 }

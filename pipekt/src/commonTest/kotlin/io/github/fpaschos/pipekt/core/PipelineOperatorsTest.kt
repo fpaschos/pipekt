@@ -21,7 +21,7 @@ class PipelineOperatorsTest :
         test("StepDef retryPolicy is preserved") {
             val policy = RetryPolicy(maxAttempts = 3, backoffMs = 500L)
             val result =
-                pipeline<String>("retry-test", maxInFlight = 10) {
+                pipeline("retry-test", maxInFlight = 10) {
                     source("src", fakeAdapter())
                     step<String, String>("with-retry", retryPolicy = policy) { it }
                 }
@@ -37,7 +37,7 @@ class PipelineOperatorsTest :
 
         test("FilterDef filteredReason is preserved") {
             val result =
-                pipeline<String>("filter-test", maxInFlight = 10) {
+                pipeline("filter-test", maxInFlight = 10) {
                     source("src", fakeAdapter())
                     filter<Nothing>("dedup", filteredReason = FilteredReason.DUPLICATE) { true }
                 }
@@ -53,7 +53,7 @@ class PipelineOperatorsTest :
 
         test("FilterDef filteredReason defaults to BELOW_THRESHOLD") {
             val result =
-                pipeline<String>("filter-default", maxInFlight = 10) {
+                pipeline("filter-default", maxInFlight = 10) {
                     source("src", fakeAdapter())
                     filter<Nothing>("default-filter") { true }
                 }
@@ -69,7 +69,7 @@ class PipelineOperatorsTest :
 
         test("PersistEachDef name is preserved") {
             val result =
-                pipeline<String>("persist-test", maxInFlight = 10) {
+                pipeline("persist-test", maxInFlight = 10) {
                     source("src", fakeAdapter())
                     step<String, String>("step1") { it }
                     persistEach("checkpoint-1")
@@ -86,7 +86,7 @@ class PipelineOperatorsTest :
 
         test("operator list order is retained") {
             val result =
-                pipeline<String>("order-test", maxInFlight = 10) {
+                pipeline("order-test", maxInFlight = 10) {
                     source("src", fakeAdapter())
                     filter<Nothing>("a") { true }
                     step<String, String>("b") { it }
@@ -101,7 +101,7 @@ class PipelineOperatorsTest :
         test("source definition is preserved in pipeline") {
             val adapter = fakeAdapter()
             val result =
-                pipeline<String>("src-test", maxInFlight = 10) {
+                pipeline("src-test", maxInFlight = 10) {
                     source("my-source", adapter)
                     step<String, String>("step1") { it }
                 }
@@ -113,7 +113,7 @@ class PipelineOperatorsTest :
 
         test("pipeline with filter step and persistEach builds successfully") {
             val result =
-                pipeline<String>("full-pipeline", maxInFlight = 50) {
+                pipeline("full-pipeline", maxInFlight = 50) {
                     source("src", fakeAdapter())
                     filter<Nothing>("filter1") { it.isNotEmpty() }
                     step<String, String>("enrich") { it.uppercase() }
