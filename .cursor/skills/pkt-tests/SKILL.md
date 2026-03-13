@@ -81,10 +81,17 @@ Rules:
 
 - **Arrow types (Option, Either, Validated):** Prefer fetching Arrow docs from **context7** (user-context7 MCP) when you need API or usage details. For Kotest matchers on Arrow types, use **https://kotest.io/docs/assertions/arrow.html** (e.g. `shouldBeSome`, `shouldBeNone`, `shouldBeRight`, `shouldBeLeft`, `shouldBeValid`, `shouldBeInvalid`). Always prefer Kotest Arrow matchers over manual unwrapping in tests.
 
+## Running tests
+
+- **Canonical command (run locally):** `./gradlew :pipekt:jvmTest --rerun`
+  - Use this to run all pipekt JVM tests; `--rerun` forces tests to run even if Gradle thinks they are up to date.
+  - When adding or changing tests, **suggest the user run this command locally** to confirm everything passes.
+- **Why not from the agent:** Cursor’s sandbox often fails or struggles to run Gradle (network restrictions, file locks, process limits, Gradle daemon/wrapper needs). Do not rely on the agent successfully executing `./gradlew` in this environment. Prefer: implement tests → tell the user to run `./gradlew :pipekt:jvmTest --rerun` locally → only claim tests “pass” after the user confirms or after evidence is shown.
+
 ## Minimum validation
 
-1. Run targeted tests for changed areas.
-2. Run full `:pipekt:check` before finalizing substantial changes.
+1. Run targeted tests for changed areas (ideally via the user running `./gradlew :pipekt:jvmTest --rerun` locally).
+2. Run full `:pipekt:check` before finalizing substantial changes (again, user-run).
 3. If any tests are skipped, call out why.
 
 ## Cross-reference
