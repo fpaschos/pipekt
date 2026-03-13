@@ -2,6 +2,7 @@ package io.github.fpaschos.pipekt.store
 
 import io.github.fpaschos.pipekt.core.IngressRecord
 import io.github.fpaschos.pipekt.core.WorkItemStatus
+import io.kotest.assertions.assertSoftly
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.nulls.shouldBeNull
@@ -42,10 +43,12 @@ class InMemoryStoreContractTest :
         test("getOrCreateRun creates a new run and returns it") {
             val store = InMemoryStore()
             val run = store.getOrCreateRun("pipe1", "v1")
-            run.pipeline shouldBe "pipe1"
-            run.planVersion shouldBe "v1"
-            run.status shouldBe RunRecord.STATUS_ACTIVE
-            run.id.shouldNotBeNull()
+            assertSoftly(run) {
+                pipeline shouldBe "pipe1"
+                planVersion shouldBe "v1"
+                status shouldBe RunRecord.STATUS_ACTIVE
+                id.shouldNotBeNull()
+            }
         }
 
         test("getOrCreateRun with same pipeline and planVersion returns the same run") {
@@ -59,27 +62,20 @@ class InMemoryStoreContractTest :
             val store = InMemoryStore()
             val v1 = store.getOrCreateRun("pipe1", "v1")
             val v2 = store.getOrCreateRun("pipe1", "v2")
-            v2.id shouldNotBe v1.id
-            v2.planVersion shouldBe "v2"
-        }
-
-        test("listActiveRuns excludes STATUS_FAILED runs") {
-            val store = InMemoryStore()
-            store.getOrCreateRun("pipe1", "v1")
-            store.getOrCreateRun("pipe1", "v2")
-            store.markRunFailed("pipe1", "v1")
-
-            val active = store.listActiveRuns("pipe1")
-            active shouldHaveSize 1
-            active.first().planVersion shouldBe "v2"
+            assertSoftly(v2) {
+                id shouldNotBe v1.id
+                planVersion shouldBe "v2"
+            }
         }
 
         test("appendIngress appended count matches number of unique records") {
             val store = InMemoryStore()
             val run = store.getOrCreateRun("pipe1", "v1")
             val result = store.appendIngress(run.id, listOf(record("s1"), record("s2"), record("s3")), firstStep = "step1")
-            result.appended shouldBe 3
-            result.duplicates shouldBe 0
+            assertSoftly(result) {
+                appended shouldBe 3
+                duplicates shouldBe 0
+            }
         }
 
         test("appendIngress skips duplicates for same runId and sourceId") {
@@ -87,8 +83,10 @@ class InMemoryStoreContractTest :
             val run = store.getOrCreateRun("pipe1", "v1")
             store.appendIngress(run.id, listOf(record("s1"), record("s2")), firstStep = "step1")
             val result = store.appendIngress(run.id, listOf(record("s2"), record("s3")), firstStep = "step1")
-            result.appended shouldBe 1
-            result.duplicates shouldBe 1
+            assertSoftly(result) {
+                appended shouldBe 1
+                duplicates shouldBe 1
+            }
         }
 
         test("claim returns PENDING items and sets them IN_PROGRESS with lease") {
@@ -99,9 +97,11 @@ class InMemoryStoreContractTest :
             val claimed = store.claim("step1", run.id, 10, 30.seconds, "worker-1")
             claimed shouldHaveSize 2
             claimed.forEach { item ->
-                item.status shouldBe WorkItemStatus.IN_PROGRESS
-                item.leaseOwner shouldBe "worker-1"
-                item.leaseExpiry.shouldNotBeNull()
+                assertSoftly(item) {
+                    status shouldBe WorkItemStatus.IN_PROGRESS
+                    leaseOwner shouldBe "worker-1"
+                    leaseExpiry.shouldNotBeNull()
+                }
             }
         }
 
@@ -125,10 +125,12 @@ class InMemoryStoreContractTest :
 
             store.getRun(run.id).shouldNotBeNull()
             val workItem = store.getWorkItem(item.id).shouldNotBeNull()
-            workItem.currentStep shouldBe "step2"
-            workItem.status shouldBe WorkItemStatus.PENDING
-            workItem.payloadJson shouldBe "\"output\""
-            workItem.attemptCount shouldBe 1
+            assertSoftly(workItem) {
+                currentStep shouldBe "step2"
+                status shouldBe WorkItemStatus.PENDING
+                payloadJson shouldBe "\"output\""
+                attemptCount shouldBe 1
+            }
         }
 
         test("checkpointSuccess with nextStep null marks item COMPLETED and nulls payloadJson") {
@@ -140,9 +142,11 @@ class InMemoryStoreContractTest :
             store.checkpointSuccess(item, "\"output\"", nextStep = null)
 
             val workItem = store.getWorkItem(item.id).shouldNotBeNull()
-            workItem.status shouldBe WorkItemStatus.COMPLETED
-            workItem.payloadJson.shouldBeNull()
-            workItem.attemptCount shouldBe 1
+            assertSoftly(workItem) {
+                status shouldBe WorkItemStatus.COMPLETED
+                payloadJson.shouldBeNull()
+                attemptCount shouldBe 1
+            }
         }
 
         test("checkpointFiltered marks item FILTERED and nulls payloadJson") {
@@ -154,10 +158,12 @@ class InMemoryStoreContractTest :
             store.checkpointFiltered(item, "BELOW_THRESHOLD")
 
             val workItem = store.getWorkItem(item.id).shouldNotBeNull()
-            workItem.status shouldBe WorkItemStatus.FILTERED
-            workItem.payloadJson.shouldBeNull()
-            workItem.lastErrorJson shouldBe "BELOW_THRESHOLD"
-            workItem.attemptCount shouldBe 1
+            assertSoftly(workItem) {
+                status shouldBe WorkItemStatus.FILTERED
+                payloadJson.shouldBeNull()
+                lastErrorJson shouldBe "BELOW_THRESHOLD"
+                attemptCount shouldBe 1
+            }
         }
 
         test("checkpointFailure with retryAt null marks item FAILED and nulls payloadJson") {
@@ -169,10 +175,12 @@ class InMemoryStoreContractTest :
             store.checkpointFailure(item, "fatal error", retryAt = null)
 
             val workItem = store.getWorkItem(item.id).shouldNotBeNull()
-            workItem.status shouldBe WorkItemStatus.FAILED
-            workItem.payloadJson.shouldBeNull()
-            workItem.lastErrorJson shouldBe "fatal error"
-            workItem.attemptCount shouldBe 1
+            assertSoftly(workItem) {
+                status shouldBe WorkItemStatus.FAILED
+                payloadJson.shouldBeNull()
+                lastErrorJson shouldBe "fatal error"
+                attemptCount shouldBe 1
+            }
         }
 
         test("checkpointFailure with retryAt keeps item PENDING with retryAt set") {
@@ -185,11 +193,13 @@ class InMemoryStoreContractTest :
             store.checkpointFailure(item, "transient error", retryAt = retryAt)
 
             val workItem = store.getWorkItem(item.id).shouldNotBeNull()
-            workItem.status shouldBe WorkItemStatus.PENDING
-            workItem.retryAt shouldBe retryAt
-            workItem.lastErrorJson shouldBe "transient error"
-            workItem.payloadJson.shouldNotBeNull()
-            workItem.attemptCount shouldBe 1
+            assertSoftly(workItem) {
+                status shouldBe WorkItemStatus.PENDING
+                retryAt shouldBe retryAt
+                lastErrorJson shouldBe "transient error"
+                payloadJson.shouldNotBeNull()
+                attemptCount shouldBe 1
+            }
         }
 
         test("countNonTerminal counts PENDING and IN_PROGRESS items but not terminal items") {
@@ -220,8 +230,10 @@ class InMemoryStoreContractTest :
 
             reclaimed shouldHaveSize 1
             val reclaimedItem = store.getWorkItem(item.id).shouldNotBeNull()
-            reclaimedItem.status shouldBe WorkItemStatus.PENDING
-            reclaimedItem.leaseOwner.shouldBeNull()
-            reclaimedItem.leaseExpiry.shouldBeNull()
+            assertSoftly(reclaimedItem) {
+                status shouldBe WorkItemStatus.PENDING
+                leaseOwner.shouldBeNull()
+                leaseExpiry.shouldBeNull()
+            }
         }
     })

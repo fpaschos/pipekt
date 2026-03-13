@@ -81,6 +81,13 @@ Rules:
 
 - **Arrow types (Option, Either, Validated):** Prefer fetching Arrow docs from **context7** (user-context7 MCP) when you need API or usage details. For Kotest matchers on Arrow types, use **https://kotest.io/docs/assertions/arrow.html** (e.g. `shouldBeSome`, `shouldBeNone`, `shouldBeRight`, `shouldBeLeft`, `shouldBeValid`, `shouldBeInvalid`). Always prefer Kotest Arrow matchers over manual unwrapping in tests.
 
+### Data classes and multi-property assertions (assertSoftly)
+
+- **Preferred for data classes:** When asserting multiple properties on a **data class** (e.g. RunRecord, WorkItem, AppendIngressResult) or any single object with several fields, use Kotest’s **`assertSoftly(obj) { ... }`** with the object as receiver. Inside the block, assert on properties without repeating the variable (e.g. `pipeline shouldBe "pipe1"` instead of `run.pipeline shouldBe "pipe1"`). All assertions run and failures are reported together.
+- **Use especially for:** RunRecord, WorkItem, AppendIngressResult, and other data-class or value types where you check several fields in one test.
+- **Example:** `assertSoftly(workItem) { status shouldBe WorkItemStatus.PENDING; payloadJson.shouldBeNull(); attemptCount shouldBe 1 }`.
+- Keep a single logical object per block; do not mix unrelated assertions (e.g. setup vs. final state) in the same `assertSoftly`.
+
 ## Running tests
 
 - **Canonical command (run locally):** `./gradlew :pipekt:jvmTest --rerun`

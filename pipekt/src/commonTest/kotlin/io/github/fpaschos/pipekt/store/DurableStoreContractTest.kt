@@ -2,6 +2,7 @@ package io.github.fpaschos.pipekt.store
 
 import io.github.fpaschos.pipekt.core.IngressRecord
 import io.github.fpaschos.pipekt.core.WorkItemStatus
+import io.kotest.assertions.assertSoftly
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import kotlin.time.Duration
@@ -46,6 +47,7 @@ class DurableStoreContractTest :
                     override suspend fun appendIngress(
                         runId: String,
                         records: List<IngressRecord<*>>,
+                        firstStep: String,
                     ): AppendIngressResult = AppendIngressResult(appended = 0, duplicates = 0)
 
                     override suspend fun claim(
@@ -84,12 +86,16 @@ class DurableStoreContractTest :
             val t3 = Instant.fromEpochMilliseconds(3000L)
 
             val run = store.getOrCreateRun("p", "v1")
-            run.pipeline.shouldBe("p")
+            assertSoftly(run) {
+                pipeline shouldBe "p"
+            }
             store.getRun("run-1") shouldBe null
             store.listActiveRuns("p") shouldBe emptyList()
             val appendResult = store.appendIngress("run-1", emptyList())
-            appendResult.appended.shouldBe(0)
-            appendResult.duplicates.shouldBe(0)
+            assertSoftly(appendResult) {
+                appended shouldBe 0
+                duplicates shouldBe 0
+            }
             store.claim("step1", "run-1", 10, Duration.parse("5s"), "worker-1") shouldBe emptyList()
             val item =
                 WorkItem(

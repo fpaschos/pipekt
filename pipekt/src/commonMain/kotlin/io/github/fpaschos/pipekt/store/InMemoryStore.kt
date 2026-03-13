@@ -39,6 +39,16 @@ class InMemoryStore : DurableStore {
 
     // ── Run lifecycle ──────────────────────────────────────────────────────────
 
+    /**
+     * Returns the existing active run for `(pipeline, planVersion)` or creates a new run.
+     *
+     * Implements [DurableStore.getOrCreateRun]. This implementation uses a single mutex;
+     * lookup and creation are atomic. Run ids are generated via [Uuid].
+     *
+     * @param pipeline Pipeline name.
+     * @param planVersion Version of the pipeline plan (for compatibility and schema evolution).
+     * @return The run record; newly created or existing matching run.
+     */
     override suspend fun getOrCreateRun(
         pipeline: String,
         planVersion: String,
@@ -58,8 +68,24 @@ class InMemoryStore : DurableStore {
                 }
         }
 
+    /**
+     * Loads a run by id.
+     *
+     * Implements [DurableStore.getRun].
+     *
+     * @param runId Unique run identifier.
+     * @return The run record, or null if not found.
+     */
     override suspend fun getRun(runId: String): RunRecord? = mutex.withLock { runs[runId] }
 
+    /**
+     * Lists runs for the pipeline that are considered active (not [RunRecord.STATUS_FAILED]).
+     *
+     * Implements [DurableStore.listActiveRuns]. Order is unspecified.
+     *
+     * @param pipeline Pipeline name.
+     * @return List of active run records.
+     */
     override suspend fun listActiveRuns(pipeline: String): List<RunRecord> =
         mutex.withLock {
             runs.values.filter { it.pipeline == pipeline && it.status != RunRecord.STATUS_FAILED }
@@ -70,15 +96,15 @@ class InMemoryStore : DurableStore {
     /**
      * Appends [records] to [runId], skipping any whose `(runId, sourceId)` pair already exists.
      *
-     * The [firstStep] parameter tells the store which step name to assign as [WorkItem.currentStep]
-     * for newly created items. The runtime supplies this when calling appendIngress.
+     * [firstStep] is assigned as [WorkItem.currentStep] for newly created items. The runtime
+     * supplies it when calling [appendIngress]; default is empty string for interface compatibility.
      *
      * @param runId Run to append to.
      * @param records Ingress records; [IngressRecord.payload] must already be a serialized JSON string.
      * @param firstStep Name of the first operator step; assigned as [WorkItem.currentStep].
      * @return [AppendIngressResult] with counts of appended and duplicate records.
      */
-    suspend fun appendIngress(
+    override suspend fun appendIngress(
         runId: String,
         records: List<IngressRecord<*>>,
         firstStep: String,
@@ -117,20 +143,23 @@ class InMemoryStore : DurableStore {
             AppendIngressResult(appended = appended, duplicates = duplicates)
         }
 
-    /**
-     * Delegates to the internal [appendIngress] that accepts a [firstStep] parameter.
-     *
-     * This override satisfies the [DurableStore] interface. The [firstStep] defaults to an empty
-     * string; callers that need step routing must use the overload with [firstStep] directly
-     * (the runtime always uses that overload).
-     */
-    override suspend fun appendIngress(
-        runId: String,
-        records: List<IngressRecord<*>>,
-    ): AppendIngressResult = appendIngress(runId, records, firstStep = "")
-
     // ── Claim ──────────────────────────────────────────────────────────────────
 
+    /**
+     * Claims up to [limit] work items for the given step and run under a lease.
+     *
+     * Implements [DurableStore.claim]. Only [WorkItemStatus.PENDING] items with matching
+     * [runId] and [step] are eligible; lease expiry is computed from [Clock.System.now] + [leaseDuration].
+     * This implementation does not consider expired leases when selecting candidates (no
+     * `IN_PROGRESS` items are reclaimed here); use [reclaimExpiredLeases] to reset stuck items.
+     *
+     * @param step Step name to claim for.
+     * @param runId Run id.
+     * @param limit Maximum number of items to claim.
+     * @param leaseDuration Lease duration from current time.
+     * @param workerId Identifier of the worker claiming the items.
+     * @return List of claimed [WorkItem]s (at most [limit]).
+     */
     override suspend fun claim(
         step: String,
         runId: String,
@@ -158,6 +187,17 @@ class InMemoryStore : DurableStore {
 
     // ── Checkpoints ────────────────────────────────────────────────────────────
 
+    /**
+     * Marks the work item as completed successfully and advances it to the next step or terminal.
+     *
+     * Implements [DurableStore.checkpointSuccess]. Atomic under the store mutex: increments [WorkItem.attemptCount],
+     * sets [WorkItem.currentStep] and [WorkItem.status], nulls [WorkItem.payloadJson] when [nextStep] is null,
+     * clears lease fields, and sets [WorkItem.updatedAt].
+     *
+     * @param item The work item to checkpoint.
+     * @param outputJson Serialized output payload for the next step (or terminal marker).
+     * @param nextStep Next step name, or null if the item has reached a terminal state.
+     */
     override suspend fun checkpointSuccess(
         item: WorkItem,
         outputJson: String,
@@ -189,6 +229,16 @@ class InMemoryStore : DurableStore {
             items[item.id] = updated
         }
 
+    /**
+     * Marks the work item as filtered out (e.g. dropped by a filter step).
+     *
+     * Implements [DurableStore.checkpointFiltered]. Atomic under the store mutex: sets status to
+     * [WorkItemStatus.FILTERED], nulls [WorkItem.payloadJson], sets [WorkItem.lastErrorJson] to [reason],
+     * increments [WorkItem.attemptCount], clears lease fields, and sets [WorkItem.updatedAt].
+     *
+     * @param item The work item to checkpoint.
+     * @param reason Human- or machine-readable reason for filtering.
+     */
     override suspend fun checkpointFiltered(
         item: WorkItem,
         reason: String,
@@ -206,6 +256,18 @@ class InMemoryStore : DurableStore {
                 )
         }
 
+    /**
+     * Marks the work item as failed; it may be retried later if [retryAt] is set.
+     *
+     * Implements [DurableStore.checkpointFailure]. Atomic under the store mutex: when [retryAt] is non-null,
+     * item remains [WorkItemStatus.PENDING] with [WorkItem.retryAt] set for later claim; when null,
+     * item is set to [WorkItemStatus.FAILED] and [WorkItem.payloadJson] is nulled. In both cases
+     * [WorkItem.attemptCount] is incremented and lease fields are cleared.
+     *
+     * @param item The work item to checkpoint.
+     * @param errorJson Serialized error information.
+     * @param retryAt Instant when the item may be retried, or null if no retry is scheduled.
+     */
     override suspend fun checkpointFailure(
         item: WorkItem,
         errorJson: String,
@@ -242,6 +304,15 @@ class InMemoryStore : DurableStore {
 
     // ── Backpressure ───────────────────────────────────────────────────────────
 
+    /**
+     * Returns the number of work items in the run that are not in a terminal status.
+     *
+     * Implements [DurableStore.countNonTerminal]. Counts items with status [WorkItemStatus.PENDING]
+     * or [WorkItemStatus.IN_PROGRESS]. Used by the runtime ingestion loop to enforce `maxInFlight` backpressure.
+     *
+     * @param runId Run id.
+     * @return Count of non-terminal work items.
+     */
     override suspend fun countNonTerminal(runId: String): Int =
         mutex.withLock {
             items.values.count {
@@ -252,6 +323,18 @@ class InMemoryStore : DurableStore {
 
     // ── Lease reclaim ──────────────────────────────────────────────────────────
 
+    /**
+     * Reclaims work items whose lease has expired by [now].
+     *
+     * Implements [DurableStore.reclaimExpiredLeases]. Resets [WorkItemStatus.IN_PROGRESS] items
+     * whose [WorkItem.leaseExpiry] is before [now] back to [WorkItemStatus.PENDING], clearing
+     * [WorkItem.leaseOwner] and [WorkItem.leaseExpiry]. The caller (runtime watchdog) supplies
+     * [now] so that expiry evaluation is deterministic and testable.
+     *
+     * @param now Cutoff instant; items with [WorkItem.leaseExpiry] before this are reclaimed.
+     * @param limit Maximum number of items to reclaim in one call.
+     * @return List of reclaimed [WorkItem]s (at most [limit]).
+     */
     override suspend fun reclaimExpiredLeases(
         now: Instant,
         limit: Int,
@@ -284,24 +367,6 @@ class InMemoryStore : DurableStore {
      * @return The [WorkItem], or null if not found.
      */
     suspend fun getWorkItem(itemId: String): WorkItem? = mutex.withLock { items[itemId] }
-
-    /**
-     * Forces a run identified by `(pipeline, planVersion)` into [RunRecord.STATUS_FAILED].
-     * Used by tests to set up [listActiveRuns] filtering scenarios.
-     *
-     * @param pipeline Pipeline name.
-     * @param planVersion Plan version of the run to fail.
-     */
-    suspend fun markRunFailed(
-        pipeline: String,
-        planVersion: String,
-    ): Unit =
-        mutex.withLock {
-            val run =
-                runs.values.firstOrNull { it.pipeline == pipeline && it.planVersion == planVersion }
-                    ?: return@withLock
-            runs[run.id] = run.copy(status = RunRecord.STATUS_FAILED, updatedAt = Clock.System.now())
-        }
 
     /**
      * Retrieves a [WorkItem] by `(runId, sourceId)`. Used by tests to assert on per-item

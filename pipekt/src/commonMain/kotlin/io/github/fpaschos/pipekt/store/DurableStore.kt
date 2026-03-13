@@ -57,11 +57,13 @@ interface DurableStore {
      *
      * @param runId Run to append to.
      * @param records Ingress records to append (payload is serialized and stored).
+     * @param firstStep Name of the first operator step to assign as [WorkItem.currentStep]; use empty string if not applicable.
      * @return [AppendIngressResult] with counts of appended and duplicate records.
      */
     suspend fun appendIngress(
         runId: String,
         records: List<IngressRecord<*>>,
+        firstStep: String = "",
     ): AppendIngressResult
 
     /**

@@ -6,9 +6,11 @@ import arrow.core.raise.either
 import io.github.fpaschos.pipekt.core.FilterDef
 import io.github.fpaschos.pipekt.core.IngressRecord
 import io.github.fpaschos.pipekt.core.ItemFailure
+import io.github.fpaschos.pipekt.core.OperatorDef
 import io.github.fpaschos.pipekt.core.PayloadSerializer
 import io.github.fpaschos.pipekt.core.PipelineDefinition
 import io.github.fpaschos.pipekt.core.SourceAdapter
+import io.github.fpaschos.pipekt.core.SourceDef
 import io.github.fpaschos.pipekt.core.StepCtx
 import io.github.fpaschos.pipekt.core.StepDef
 import io.github.fpaschos.pipekt.store.DurableStore
@@ -66,7 +68,7 @@ import kotlin.uuid.Uuid
  * `plans/streams-technical-requirements.md` (defaults and recommended ranges).
  *
  * @param definition Validated pipeline to execute.
- * @param store [DurableStore] implementation providing durability and progress tracking.
+ * @param store Store implementation; Phase 1 supports [InMemoryStore] only (Phase 3 adds PostgresStore).
  * @param serializer [PayloadSerializer] for payload serialization at ingestion and deserialization at execution.
  * @param scope [CoroutineScope] on which all runtime loops are launched. Inject a [TestScope] for deterministic testing.
  * @param planVersion Version key passed to [DurableStore.getOrCreateRun]; bump on incompatible plan changes.
@@ -95,10 +97,17 @@ class PipelineRuntime(
 
     /**
      * Precomputed ordered list of executable operators ([StepDef] and [FilterDef] only).
-     * Used by worker loop launching and next-step name resolution.
+     * Built via exhaustive [when] over [OperatorDef]; used by worker loop launching and next-step name resolution.
      */
-    private val executableOps by lazy {
-        definition.operators.filter { it is StepDef<*, *> || it is FilterDef<*> }
+    @Suppress("UNCHECKED_CAST")
+    private val executableOps: List<ExecutableOp> by lazy {
+        definition.operators.map { op ->
+            when (op) {
+                is StepDef<*, *> -> StepExecutable(op as StepDef<Any?, Any?>)
+                is FilterDef<*> -> FilterExecutable(op as FilterDef<Any?>)
+                is SourceDef<*> -> error("Pipeline '${definition.name}' has a SourceDef validation should have failed")
+            }
+        }
     }
 
     /**
@@ -106,11 +115,7 @@ class PipelineRuntime(
      * Used by the ingestion loop when serializing polled records.
      */
     private val sourcePayloadType: KType by lazy {
-        when (val first = executableOps.firstOrNull()) {
-            is StepDef<*, *> -> first.inputType
-            is FilterDef<*> -> first.inputType
-            else -> error("Pipeline '${definition.name}' has no executable operators")
-        }
+        executableOps.first().inputType // Never throws validation
     }
 
     /**
@@ -143,11 +148,8 @@ class PipelineRuntime(
 
     @Suppress("UNCHECKED_CAST")
     private fun launchIngestionLoop() {
-        val firstStepName = executableOps.firstOrNull()?.name ?: return
+        val firstStepName = executableOps.firstOrNull()?.stepName ?: return
         val adapter = definition.source.adapter as SourceAdapter<Any?>
-        val inMemoryStore =
-            store as? InMemoryStore
-                ?: error("PipelineRuntime requires InMemoryStore in Phase 1 (Phase 3 adds PostgresStore)")
 
         jobs +=
             scope.launch {
@@ -164,7 +166,7 @@ class PipelineRuntime(
                                         payload = serializer.serialize(record.payload, sourcePayloadType),
                                     )
                                 }
-                            inMemoryStore.appendIngress(runId, ingress, firstStep = firstStepName)
+                            store.appendIngress(runId, ingress, firstStep = firstStepName)
                             adapter.ack(records)
                         }
                     }
@@ -176,21 +178,13 @@ class PipelineRuntime(
     // ── Worker loops ───────────────────────────────────────────────────────────
 
     /**
-     * Maps each executable operator to an [ExecutableOp] adapter and launches one worker loop per
-     * operator. New operator types only need a new [ExecutableOp] implementation; the launch loop
-     * itself is not modified.
+     * Launches one worker loop per [ExecutableOp]. The list is already built with an exhaustive
+     * [when] over [OperatorDef]; no branching here.
      */
-    @Suppress("UNCHECKED_CAST")
     private fun launchWorkerLoops() {
-        executableOps.forEachIndexed { index, op ->
-            val nextStepName = executableOps.getOrNull(index + 1)?.name
-            val exe: ExecutableOp? =
-                when (op) {
-                    is StepDef<*, *> -> StepExecutable(op as StepDef<Any?, Any?>)
-                    is FilterDef<*> -> FilterExecutable(op as FilterDef<Any?>)
-                    else -> null // SourceDef is not in executableOps; no other operator types
-                }
-            exe?.let { launchWorker(it, nextStepName) }
+        executableOps.forEachIndexed { index, exe ->
+            val nextStepName = executableOps.getOrNull(index + 1)?.stepName
+            launchWorker(exe, nextStepName)
         }
     }
 
@@ -205,104 +199,39 @@ class PipelineRuntime(
         exe: ExecutableOp,
         nextStepName: String?,
     ) {
+        val ctx = executorContext
         jobs +=
             scope.launch {
                 while (isActive) {
                     val claimed = store.claim(exe.stepName, runId, workerClaimLimit, leaseDuration, workerId)
                     for (item in claimed) {
-                        exe.executeAndCheckpoint(item, nextStepName)
+                        exe.executeAndCheckpoint(ctx, item, nextStepName)
                     }
                     delay(workerPollInterval)
                 }
             }
     }
 
-    // ── Operator executors ─────────────────────────────────────────────────────
-
     /**
-     * Internal abstraction for an executable operator: encapsulates the step name used for
-     * [DurableStore.claim] and the operator-specific execute-and-checkpoint logic.
-     *
-     * Adding a new operator type (e.g. `MapDef`) only requires a new implementation of this
-     * interface; the worker launch loop ([launchWorker]) is not modified.
+     * Execution context for [ExecutableOp]; created lazily so [runId] is set before first use.
      */
-    private sealed interface ExecutableOp {
-        /** Step name used for [DurableStore.claim]. */
-        val stepName: String
+    private val executorContext: StepExecutorContext by lazy {
+        object : StepExecutorContext {
+            override val store: DurableStore get() = this@PipelineRuntime.store
+            override val serializer: PayloadSerializer get() = this@PipelineRuntime.serializer
 
-        /**
-         * Deserializes the item payload, executes the operator function, and checkpoints the result.
-         *
-         * @param item The claimed work item.
-         * @param nextStepName Next step name, or null if this is the final operator.
-         */
-        suspend fun executeAndCheckpoint(
-            item: WorkItem,
-            nextStepName: String?,
-        )
-    }
+            override suspend fun <I, R> runStepFn(
+                item: WorkItem,
+                stepName: String,
+                inputType: KType,
+                block: suspend context(Raise<ItemFailure>, StepCtx) (I) -> R,
+            ): Either<ItemFailure, R> = this@PipelineRuntime.runStepFn(item, stepName, inputType, block)
 
-    /**
-     * [ExecutableOp] for [StepDef]: runs the step function and checkpoints success (with serialized
-     * output) or delegates failure to [handleFailure].
-     */
-    private inner class StepExecutable(
-        private val def: StepDef<Any?, Any?>,
-    ) : ExecutableOp {
-        override val stepName: String = def.name
-
-        override suspend fun executeAndCheckpoint(
-            item: WorkItem,
-            nextStepName: String?,
-        ) {
-            val result =
-                runStepFn<Any?, Any?>(item, def.name, def.inputType) { input ->
-                    def.fn(input)
-                }
-            result.fold(
-                ifLeft = { failure -> handleFailure(item, failure, def) },
-                ifRight = { output ->
-                    val outJson = serializer.serialize(output!!, def.outputType)
-                    store.checkpointSuccess(item, outJson, nextStepName)
-                },
-            )
-        }
-    }
-
-    /**
-     * [ExecutableOp] for [FilterDef]: runs the filter predicate and checkpoints filtered (false
-     * result or [ItemFailure.isFiltered]), success (true result, payload forwarded unchanged), or
-     * delegates non-filter failures to [handleFailure].
-     */
-    private inner class FilterExecutable(
-        private val def: FilterDef<Any?>,
-    ) : ExecutableOp {
-        override val stepName: String = def.name
-
-        override suspend fun executeAndCheckpoint(
-            item: WorkItem,
-            nextStepName: String?,
-        ) {
-            val result =
-                runStepFn<Any?, Boolean>(item, def.name, def.inputType) { input ->
-                    def.predicate(input)
-                }
-            result.fold(
-                ifLeft = { failure ->
-                    if (failure.isFiltered()) {
-                        store.checkpointFiltered(item, failure.message)
-                    } else {
-                        handleFailure(item, failure, stepDef = null)
-                    }
-                },
-                ifRight = { keep ->
-                    if (keep) {
-                        store.checkpointSuccess(item, item.payloadJson!!, nextStepName)
-                    } else {
-                        store.checkpointFiltered(item, def.filteredReason.name)
-                    }
-                },
-            )
+            override suspend fun handleFailure(
+                item: WorkItem,
+                failure: ItemFailure,
+                stepDef: StepDef<*, *>?,
+            ) = this@PipelineRuntime.handleFailure(item, failure, stepDef)
         }
     }
 
@@ -321,7 +250,7 @@ class PipelineRuntime(
     // ── Helpers ────────────────────────────────────────────────────────────────
 
     /**
-     * Shared Arrow + context helper used by all [ExecutableOp] implementations.
+     * Shared Arrow  and context helper used by all [ExecutableOp] implementations.
      *
      * Deserializes [item]'s `payloadJson` to [I] using [inputType], constructs a [StepCtx],
      * then executes [block] inside an `either {}` scope with the ctx in context. The resulting

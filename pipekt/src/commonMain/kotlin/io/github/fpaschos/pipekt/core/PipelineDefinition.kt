@@ -13,7 +13,7 @@ import kotlin.reflect.KType
  *
  * @param name Pipeline name (unique per runtime instance).
  * @param source The single source operator; see [SourceDef].
- * @param operators Ordered list of steps, filters, and persist-each boundaries.
+ * @param operators Ordered list of steps, filters.
  * @param maxInFlight Maximum number of non-terminal items per run before ingestion pauses.
  * @param retentionDays Days after which terminal items can be archived; default 30.
  */
