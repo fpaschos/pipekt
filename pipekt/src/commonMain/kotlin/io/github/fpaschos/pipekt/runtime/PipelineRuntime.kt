@@ -7,7 +7,6 @@ import io.github.fpaschos.pipekt.core.FilterDef
 import io.github.fpaschos.pipekt.core.IngressRecord
 import io.github.fpaschos.pipekt.core.ItemFailure
 import io.github.fpaschos.pipekt.core.PayloadSerializer
-import io.github.fpaschos.pipekt.core.PersistEachDef
 import io.github.fpaschos.pipekt.core.PipelineDefinition
 import io.github.fpaschos.pipekt.core.SourceAdapter
 import io.github.fpaschos.pipekt.core.StepCtx
@@ -59,9 +58,6 @@ import kotlin.uuid.Uuid
  * the next step), `false` filters it out. A raised [ItemFailure] that [ItemFailure.isFiltered]
  * also filters; other failures are handled as errors.
  *
- * **[PersistEachDef] semantics:** no-op. Durable checkpointing already occurs after every step via
- * the atomic store operations.
- *
  * **Worker claim limit:** each worker loop claims up to [workerClaimLimit] items per poll cycle.
  * Default is 10; increase for higher throughput (see `plans/streams-technical-requirements.md`).
  *
@@ -98,7 +94,7 @@ class PipelineRuntime(
     private lateinit var runId: String
 
     /**
-     * Precomputed ordered list of executable operators (only [StepDef] and [FilterDef]; [PersistEachDef] excluded).
+     * Precomputed ordered list of executable operators ([StepDef] and [FilterDef] only).
      * Used by worker loop launching and next-step name resolution.
      */
     private val executableOps by lazy {
@@ -192,10 +188,9 @@ class PipelineRuntime(
                 when (op) {
                     is StepDef<*, *> -> StepExecutable(op as StepDef<Any?, Any?>)
                     is FilterDef<*> -> FilterExecutable(op as FilterDef<Any?>)
-                    is PersistEachDef -> null // no-op marker; checkpoint already happens after each step
-                    else -> null // SourceDef and other operators are not executed as worker loops
+                    else -> null // SourceDef is not in executableOps; no other operator types
                 }
-            if (exe != null) launchWorker(exe, nextStepName)
+            exe?.let { launchWorker(it, nextStepName) }
         }
     }
 

@@ -89,7 +89,6 @@ The example models a single durable entity across pipeline stages:
 - Continuous source polling maps directly to `INFINITE` pipelines.
 - Source returns list payloads (`FeatureCollection.features[]`), easy for `poll(maxItems)`.
 - Enrichment requires async HTTP (`suspend StepFn`) and retry policies.
-- `persistEach` after first enrichment proves restart from mid-pipeline.
 - Stable business key exists (`event.id`) for `sourceId` idempotency.
 - Domain is simple enough to reason about while still stressing runtime paths.
 
@@ -102,9 +101,8 @@ Target pipeline name: `earthquake-enrichment-v1`
 1. `source("usgs-feed", usgsSourceAdapter)`
 2. `filter("significant-quakes")` keep events above threshold (e.g. `mag >= 2.5`)
 3. `step("enrich-weather")` call Open-Meteo
-4. `persistEach("weather-checkpoint")`
-5. `step("enrich-secondary")` call OpenAQ (or fallback API)
-6. `step("to-output-row")` normalize final payload for sink/testing
+4. `step("enrich-secondary")` call OpenAQ (or fallback API)
+5. `step("to-output-row")` normalize final payload for sink/testing
 
 No barrier/finalizer is used (v1 rule).
 
@@ -229,8 +227,6 @@ val definitionEither = pipeline<QuakeEvent>(
     val weather = weatherApi.fetchAt(quake.latitude, quake.longitude, quake.timeEpochMs)
     quake to weather
   }
-
-  persistEach("weather-checkpoint")
 
   step<Pair<QuakeEvent, WeatherEnrichment>, QuakeEnriched>(
     name = "enrich-secondary",

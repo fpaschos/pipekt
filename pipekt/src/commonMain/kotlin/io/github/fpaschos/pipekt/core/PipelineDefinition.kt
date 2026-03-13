@@ -42,7 +42,7 @@ sealed class PipelineValidationError {
     /** No source was defined via [PipelineBuilder.source]. */
     data object NoSourceDefined : PipelineValidationError()
 
-    /** operators are empty; at least one step, filter, or persistEach is required. */
+    /** operators contain no step or filter; at least one step or filter is required. */
     data object EmptyPipeline : PipelineValidationError()
 
     /** maxInFlight is not positive; must be >= 1 for backpressure. */

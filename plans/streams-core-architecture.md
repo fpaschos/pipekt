@@ -199,14 +199,12 @@ The initial operator set is intentionally small:
 - `source`
 - `step`
 - `filter`
-- `persistEach`
 
 Operator intent:
 
 - `source` declares ingress contract, not transport implementation
 - `step` performs typed business transformation
 - `filter` removes items from further processing without treating them as failures
-- `persistEach` enforces durable checkpoint visibility after a phase; enables mid-pipeline restart
 
 `barrier` and `finalizeRun` are not part of v1. They are deferred to a future `BOUNDED` mode extension.
 

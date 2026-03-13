@@ -15,7 +15,7 @@ Use this skill for **creation** and **validation** of tests. Align tests with `p
 ## Test names: readable, behavior-focused
 
 - Use **readable, sentence-style test names** that describe the scenario and expected outcome. Prefer names that read like a short sentence.
-- **Good:** `"pipeline with filter step and persistEach builds successfully"`, `"left is returned when step config is invalid"`.
+- **Good:** `"pipeline with filter and steps builds successfully"`, `"left is returned when step config is invalid"`.
 - **Bad:** `"runRecordHasRequiredFields"`, `"test1"`, `"works"`. Avoid camelCase “function names” or vague labels.
 
 ## When to use

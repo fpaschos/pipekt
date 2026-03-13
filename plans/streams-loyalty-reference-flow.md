@@ -40,14 +40,13 @@ The loyalty reference flow is an **INFINITE** pipeline:
 | AMQP continuous ingress | `source` | run ingress |
 | sequence-id eligibility | `filter` | item |
 | download policy details | `step` | item |
-| persist details checkpoint | `persistEach` | item |
 | phase-2 external call | `step` (sequential phase; concurrency limits are runtime concern in v1) | item |
 
 ---
 
 ## Reference Pipeline Shape
 
-DSL entry is `pipeline(name, maxInFlight, retentionDays = 30, block)`. Builder: `source(name, adapter)`, `step(name, retryPolicy?, fn)`, `filter(name, filteredReason?, predicate)`, `persistEach(name)`. No chaining; each call is a standalone statement. Returns `Either<List<PipelineValidationError>, PipelineDefinition>`.
+DSL entry is `pipeline(name, maxInFlight, retentionDays = 30, block)`. Builder: `source(name, adapter)`, `step(name, retryPolicy?, fn)`, `filter(name, filteredReason?, predicate)`. No chaining; each call is a standalone statement. Returns `Either<List<PipelineValidationError>, PipelineDefinition>`.
 
 ```kotlin
 pipeline<PolicyMessage>(
@@ -64,8 +63,6 @@ pipeline<PolicyMessage>(
   step<PolicyMessage, PolicyDetails>("download-policy-details") { msg ->
     detailsApi.fetch(msg.policyNumber)
   }
-
-  persistEach("details-checkpoint")
 
   step<PolicyDetails, Phase2Result>("phase2-one-by-one") { details ->
     phase2Api.send(details)

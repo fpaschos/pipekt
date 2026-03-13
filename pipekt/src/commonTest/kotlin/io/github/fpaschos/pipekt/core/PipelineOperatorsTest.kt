@@ -8,18 +8,17 @@ import kotlin.reflect.typeOf
 /**
  * Tests for operator definitions and their preservation in [PipelineDefinition].
  *
- * All operator types ([StepDef], [FilterDef], [PersistEachDef]) are built via the [PipelineBuilder]
- * DSL. Each operator call is an independent statement on the block receiver — no chaining is
- * required and no explicit input/output type annotations are needed at call sites.
+ * Operator types [StepDef] and [FilterDef] are built via the [PipelineBuilder] DSL. Each operator
+ * call is an independent statement on the block receiver — no chaining is required and no
+ * explicit input/output type annotations are needed at call sites.
  *
  * **Contract and behavior coverage:**
  * - [StepDef]: retryPolicy preserved (maxAttempts, backoffMs); inputType captured from the
  *   preceding operator's output type; outputType captured via reified inference from the lambda.
  * - [FilterDef]: filteredReason default (BELOW_THRESHOLD) and override (e.g. DUPLICATE); inputType
  *   captured from the current flowing output type.
- * - [PersistEachDef]: name preserved; type-transparent.
  * - Operator order and source preservation in the built definition.
- * - Full pipeline with filter + persistEach builds and retains correct operator list.
+ * - Full pipeline with filter + step builds and retains correct operator list.
  */
 class PipelineOperatorsTest :
     FunSpec({
@@ -89,24 +88,13 @@ class PipelineOperatorsTest :
             filterOp.inputType shouldBe typeOf<String>()
         }
 
-        test("PersistEachDef name is preserved") {
-            val def =
-                pipeline("persist-test", maxInFlight = 10) {
-                    source("src", fakeAdapter())
-                    step("step1") { it: String -> it }
-                    persistEach("checkpoint-1")
-                }.shouldBeRight()
-            val persistOp = def.operators.filterIsInstance<PersistEachDef>().first()
-            persistOp.name shouldBe "checkpoint-1"
-        }
-
         test("operator list order is retained") {
             val def =
                 pipeline("order-test", maxInFlight = 10) {
                     source("src", fakeAdapter())
                     filter("a") { _: String -> true }
                     step("b") { it: String -> it }
-                    persistEach("c")
+                    step("c") { it: String -> it }
                     step("d") { it: String -> it }
                 }.shouldBeRight()
             def.operators.map { it.name } shouldBe listOf("a", "b", "c", "d")
@@ -123,15 +111,14 @@ class PipelineOperatorsTest :
             def.source.adapter shouldBe adapter
         }
 
-        test("pipeline with filter step and persistEach builds successfully") {
+        test("pipeline with filter and steps builds successfully") {
             val def =
                 pipeline("full-pipeline", maxInFlight = 50) {
                     source("src", fakeAdapter())
                     filter("filter1") { it: String -> it.isNotEmpty() }
                     step("enrich") { it: String -> it.uppercase() }
-                    persistEach("checkpoint")
                     step("publish") { it: String -> it }
                 }.shouldBeRight()
-            def.operators.size shouldBe 4
+            def.operators.size shouldBe 3
         }
     })

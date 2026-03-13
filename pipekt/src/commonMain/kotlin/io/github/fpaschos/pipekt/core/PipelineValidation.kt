@@ -18,7 +18,7 @@ import kotlin.reflect.KType
  * - maxInFlight > 0.
  * - No duplicate names (source name and all operator names must be unique).
  * - Type chain: each operator's declared input type must match the output type of the preceding
- *   operator (or the source type for the first operator). [PersistEachDef] is transparent.
+ *   operator (or the source type for the first operator).
  *
  * Returns [Either.Right] with the definition only when there are no errors.
  *
@@ -47,7 +47,9 @@ fun validate(
         val resolvedSource =
             accumulate {
                 ensureOrAccumulate(source != null) { PipelineValidationError.NoSourceDefined }
-                ensureOrAccumulate(operators.isNotEmpty()) { PipelineValidationError.EmptyPipeline }
+                ensureOrAccumulate(
+                    operators.any { it is StepDef<*, *> || it is FilterDef<*> },
+                ) { PipelineValidationError.EmptyPipeline }
                 ensureOrAccumulate(maxInFlight > 0) { PipelineValidationError.InvalidMaxInFlight }
 
                 val allNames =
@@ -86,10 +88,6 @@ fun validate(
                                     )
                                 }
                                 // filter is transparent — currentType unchanged
-                            }
-
-                            is PersistEachDef -> {
-                                // transparent pass-through; type unchanged
                             }
 
                             is SourceDef<*> -> {

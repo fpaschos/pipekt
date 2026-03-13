@@ -9,7 +9,7 @@ import kotlin.reflect.typeOf
 /**
  * Builder for constructing a pipeline via the DSL; the receiver of the [pipeline] block.
  *
- * Each operator call ([source], [step], [filter], [persistEach]) is an independent statement
+ * Each operator call ([source], [step], [filter]) is an independent statement
  * on this receiver — no chaining is required. Type [T] is the source payload type, fixed at
  * the [pipeline] call site.
  *
@@ -116,17 +116,6 @@ class PipelineBuilder<T>(
     }
 
     /**
-     * Appends a persist-each boundary (durable checkpoint before the next step).
-     *
-     * Type-transparent: [currentOutputType] is unchanged.
-     *
-     * @param name Unique step name.
-     */
-    fun persistEach(name: String) {
-        operators += PersistEachDef(name = name)
-    }
-
-    /**
      * Validates and builds the pipeline; equivalent to calling [validate] with the builder's
      * current state.
      *
@@ -148,8 +137,7 @@ class PipelineBuilder<T>(
  * Top-level DSL entry to define a pipeline.
  *
  * Creates a [PipelineBuilder]<[T]> as the block receiver. Each call inside the block
- * ([PipelineBuilder.source], [PipelineBuilder.step], [PipelineBuilder.filter],
- * [PipelineBuilder.persistEach]) is a standalone statement — no chaining is required and no
+ * ([PipelineBuilder.source], [PipelineBuilder.step], [PipelineBuilder.filter]) is a standalone statement — no chaining is required and no
  * explicit input/output type annotations are needed on [PipelineBuilder.step] or
  * [PipelineBuilder.filter].
  *
