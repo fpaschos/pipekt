@@ -6,6 +6,7 @@ These documents are the active source of truth for the new parallel `streams` li
 
 - [streams-current-state-and-legacy-boundary.md](plans/streams-current-state-and-legacy-boundary.md)
 - [streams-core-architecture.md](plans/streams-core-architecture.md)
+- [streams-kotlin-flow-boundary.md](plans/streams-kotlin-flow-boundary.md)
 - [streams-contracts-v1.md](plans/streams-contracts-v1.md)
 - [streams-loyalty-reference-flow.md](plans/streams-loyalty-reference-flow.md)
 - [streams-delivery-phases.md](plans/streams-delivery-phases.md)
