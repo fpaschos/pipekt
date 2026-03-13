@@ -10,7 +10,11 @@
 - [x] PipelineDefinition + validate() + DSL builder (build() returns Either; errors: DuplicateStepName, NoSourceDefined, EmptyPipeline, InvalidMaxInFlight, TypeMismatch)
 - [x] PipelineDefinitionTest + PipelineOperatorsTest passing
 
-### Phase 1B — Store SPI + Entities (not started)
+### Phase 1B — Store SPI + Entities (complete)
+- [x] RunRecord, WorkItem, AppendIngressResult in `pipekt.store`
+- [x] DurableStore interface with getOrCreateRun, getRun, listActiveRuns, appendIngress, claim, checkpointSuccess/Filtered/Failure, countNonTerminal, reclaimExpiredLeases
+- [x] WorkItemStatus remains in core; store depends on core for IngressRecord and WorkItemStatus
+- [x] Removed AppendIngressResult enum from core in favor of store's bulk result type
 
 ### Phase 1C — InMemoryStore + FakeSourceAdapter (not started)
 
