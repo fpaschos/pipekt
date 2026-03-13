@@ -3,6 +3,7 @@ package io.github.fpaschos.pipekt.store
 import io.github.fpaschos.pipekt.core.WorkItemStatus
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import kotlin.time.Instant
 
 /**
  * Contract coverage for [WorkItem] as a persistent entity.
@@ -17,6 +18,8 @@ class WorkItemTest :
     FunSpec({
 
         test("work item exposes all required fields") {
+            val createdAt = Instant.fromEpochMilliseconds(1000L)
+            val updatedAt = Instant.fromEpochMilliseconds(2000L)
             val w =
                 WorkItem(
                     id = "item-1",
@@ -28,10 +31,10 @@ class WorkItemTest :
                     lastErrorJson = null,
                     attemptCount = 0,
                     leaseOwner = null,
-                    leaseExpiryMs = null,
-                    retryAtMs = null,
-                    createdAtMs = 1000L,
-                    updatedAtMs = 2000L,
+                    leaseExpiry = null,
+                    retryAt = null,
+                    createdAt = createdAt,
+                    updatedAt = updatedAt,
                 )
             w.id.shouldBe("item-1")
             w.runId.shouldBe("run-1")
@@ -42,9 +45,9 @@ class WorkItemTest :
             w.lastErrorJson.shouldBe(null)
             w.attemptCount.shouldBe(0)
             w.leaseOwner.shouldBe(null)
-            w.leaseExpiryMs.shouldBe(null)
-            w.retryAtMs.shouldBe(null)
-            w.createdAtMs.shouldBe(1000L)
-            w.updatedAtMs.shouldBe(2000L)
+            w.leaseExpiry.shouldBe(null)
+            w.retryAt.shouldBe(null)
+            w.createdAt.shouldBe(createdAt)
+            w.updatedAt.shouldBe(updatedAt)
         }
     })

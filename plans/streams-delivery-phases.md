@@ -178,6 +178,15 @@ CREATE INDEX idx_work_items_claim
 
 No `attempts` table in MVP. No `finalizer_locks` table. Background archival/deletion job targets `work_items` rows older than `retentionDays` days (read from `PipelineDefinition`; default 30; set lower for high-volume pipelines). The `runs` row for an INFINITE pipeline is permanent.
 
+**Run status semantics:** `status` is a coarse run lifecycle and health indicator. For `INFINITE` pipelines the expected values are:
+
+- `ACTIVE` — run is healthy and available for ingestion and execution. An `INFINITE` run typically remains `ACTIVE` for its entire lifetime.
+- `FAILED` — run entered an unrecoverable failure state; no further ingestion or execution should occur for this run.
+
+`idx_runs_active` uses `WHERE status NOT IN ('FAILED')` to quickly locate restartable runs on startup. Only `FAILED` is treated as non-active in v1; `INFINITE` runs have no `COMPLETED` status.
+
+**Rolling-run strategy:** `DurableStore.getOrCreateRun(pipeline, planVersion, nowMs)` is keyed by `(pipeline, planVersion)`. On restart with the same plan version the existing `ACTIVE` run is resumed. When a pipeline change is incompatible with existing work items (e.g. payload schema change, topology rewrite), `planVersion` must be bumped. This creates a new `RunRecord` with a fresh `id` while the older run remains in the `runs` table (usually transitioning to `FAILED` or left as a historical record). Tooling that decides which run to resume must use the `(pipeline, planVersion)` pair together with `status` from `listActiveRuns`.
+
 ### Implementation Notes (sqlx4k)
 
 The Postgres store implementation uses [sqlx4k](https://github.com/smyrgeorge/sqlx4k) as the database driver. The following decisions apply:

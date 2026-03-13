@@ -171,6 +171,10 @@ interface DurableStore {
 }
 ```
 
+Run lifecycle notes:
+
+- `getOrCreateRun(pipeline, planVersion, nowMs)` looks up or creates a run keyed by `(pipeline, planVersion)`. Calling it with the same pipeline name and plan version returns the existing active run. Bumping `planVersion` creates a new long-lived run with a fresh run id while older runs remain in the store. Callers must bump `planVersion` when making changes that are incompatible with existing work items (e.g. step payload schema changes, pipeline topology rewrites). Active-run queries and restart recovery use `(pipeline, planVersion)` together with `status` to identify which run to resume.
+
 Contract rules:
 
 - store operations are authoritative for progress
@@ -193,6 +197,13 @@ Required entity families:
 
 - run id, pipeline name, plan version
 - status and timestamps
+
+V1 run-level status values:
+
+- `ACTIVE` — run is healthy and available for ingestion and execution. The normal lifetime state for an `INFINITE` run.
+- `FAILED` — run is permanently unusable due to an unrecoverable condition; excluded from `listActiveRuns` and the active-run Postgres index (`idx_runs_active`).
+
+For `INFINITE` pipelines, runs do not have a `COMPLETED` status. A run typically remains `ACTIVE` for its entire lifetime. `FAILED` is reserved for conditions that prevent any further progress on the run (e.g. unrecoverable store failure or administrative decommission). Items within the run are individually terminal (`COMPLETED`, `FILTERED`, `FAILED`); the run status is a coarse run-level health indicator only.
 
 #### WorkItem minimum fields
 

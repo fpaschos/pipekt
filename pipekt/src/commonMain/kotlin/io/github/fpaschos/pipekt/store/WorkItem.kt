@@ -1,6 +1,7 @@
 package io.github.fpaschos.pipekt.store
 
 import io.github.fpaschos.pipekt.core.WorkItemStatus
+import kotlin.time.Instant
 
 /**
  * Persistent work item for a single ingested record in a run.
@@ -17,10 +18,10 @@ import io.github.fpaschos.pipekt.core.WorkItemStatus
  * @param lastErrorJson Serialized last error, if any (e.g. after checkpointFailure).
  * @param attemptCount Number of processing attempts for the current step.
  * @param leaseOwner Id of the worker holding the lease, or null if unclaimed.
- * @param leaseExpiryMs Epoch ms when the lease expires, or null if unclaimed.
- * @param retryAtMs Epoch ms when a failed item may be retried, or null.
- * @param createdAtMs Epoch ms when the item was created.
- * @param updatedAtMs Epoch ms when the item was last updated.
+ * @param leaseExpiry Instant when the lease expires, or null if unclaimed.
+ * @param retryAt Instant when a failed item may be retried, or null.
+ * @param createdAt Instant when the item was created.
+ * @param updatedAt Instant when the item was last updated.
  */
 data class WorkItem(
     val id: String,
@@ -32,8 +33,8 @@ data class WorkItem(
     val lastErrorJson: String?,
     val attemptCount: Int,
     val leaseOwner: String?,
-    val leaseExpiryMs: Long?,
-    val retryAtMs: Long?,
-    val createdAtMs: Long,
-    val updatedAtMs: Long,
+    val leaseExpiry: Instant?,
+    val retryAt: Instant?,
+    val createdAt: Instant,
+    val updatedAt: Instant,
 )

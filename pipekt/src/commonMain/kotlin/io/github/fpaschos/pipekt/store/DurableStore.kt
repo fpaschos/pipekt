@@ -1,6 +1,8 @@
 package io.github.fpaschos.pipekt.store
 
 import io.github.fpaschos.pipekt.core.IngressRecord
+import kotlin.time.Instant
+import kotlin.time.Duration
 
 /**
  * Durable store SPI for pipeline runs and work items.
@@ -18,13 +20,13 @@ interface DurableStore {
      *
      * @param pipeline Pipeline name.
      * @param planVersion Version of the pipeline plan (for compatibility and schema evolution).
-     * @param nowMs Current time in epoch milliseconds (used for [RunRecord.createdAtMs]/updatedAtMs).
+     * @param now Current time (used for [RunRecord.createdAt] / [RunRecord.updatedAt]).
      * @return The run record; newly created or existing matching run.
      */
     suspend fun getOrCreateRun(
         pipeline: String,
         planVersion: String,
-        nowMs: Long,
+        now: Instant,
     ): RunRecord
 
     /**
@@ -48,34 +50,36 @@ interface DurableStore {
      *
      * @param runId Run to append to.
      * @param records Ingress records to append (payload type is erased).
-     * @param nowMs Current time in epoch milliseconds.
+     * @param now Current time (used for [WorkItem.createdAt] / [WorkItem.updatedAt]).
      * @return [AppendIngressResult] with counts of appended and duplicate records.
      */
     suspend fun appendIngress(
         runId: String,
         records: List<IngressRecord<*>>,
-        nowMs: Long,
+        now: Instant,
     ): AppendIngressResult
 
     /**
      * Claims up to [limit] work items for the given step and run, under a lease.
      *
      * Only items that are unclaimed or whose lease has expired are eligible. Claimed items
-     * are associated with [workerId] and lease expiry [leaseMs] from now.
+     * are associated with [workerId] and a lease expiry of `now + leaseDuration`.
      *
      * @param step Step name to claim for.
      * @param runId Run id.
      * @param limit Maximum number of items to claim.
-     * @param leaseMs Lease duration in milliseconds from now.
+     * @param leaseDuration Lease duration from now.
      * @param workerId Identifier of the worker claiming the items.
+     * @param now Current time used to compute [WorkItem.leaseExpiry].
      * @return List of claimed [WorkItem]s (at most [limit]).
      */
     suspend fun claim(
         step: String,
         runId: String,
         limit: Int,
-        leaseMs: Long,
+        leaseDuration: Duration,
         workerId: String,
+        now: Instant,
     ): List<WorkItem>
 
     /**
@@ -86,13 +90,13 @@ interface DurableStore {
      * @param item The work item to checkpoint.
      * @param outputJson Serialized output payload for the next step (or terminal marker).
      * @param nextStep Next step name, or null if the item is terminal.
-     * @param nowMs Current time in epoch milliseconds.
+     * @param now Current time (used for [WorkItem.updatedAt]).
      */
     suspend fun checkpointSuccess(
         item: WorkItem,
         outputJson: String,
         nextStep: String?,
-        nowMs: Long,
+        now: Instant,
     )
 
     /**
@@ -100,27 +104,27 @@ interface DurableStore {
      *
      * @param item The work item to checkpoint.
      * @param reason Human- or machine-readable reason for filtering.
-     * @param nowMs Current time in epoch milliseconds.
+     * @param now Current time (used for [WorkItem.updatedAt]).
      */
     suspend fun checkpointFiltered(
         item: WorkItem,
         reason: String,
-        nowMs: Long,
+        now: Instant,
     )
 
     /**
-     * Marks the work item as failed; it may be retried later if [retryAtEpochMs] is set.
+     * Marks the work item as failed; it may be retried later if [retryAt] is set.
      *
      * @param item The work item to checkpoint.
      * @param errorJson Serialized error information.
-     * @param retryAtEpochMs Epoch ms when the item may be retried, or null if no retry.
-     * @param nowMs Current time in epoch milliseconds.
+     * @param retryAt Instant when the item may be retried, or null if no retry.
+     * @param now Current time (used for [WorkItem.updatedAt]).
      */
     suspend fun checkpointFailure(
         item: WorkItem,
         errorJson: String,
-        retryAtEpochMs: Long?,
-        nowMs: Long,
+        retryAt: Instant?,
+        now: Instant,
     )
 
     /**
@@ -134,12 +138,12 @@ interface DurableStore {
     /**
      * Reclaims work items whose lease has expired by the given time.
      *
-     * @param nowEpochMs Current time in epoch milliseconds.
+     * @param now Current time; items with [WorkItem.leaseExpiry] before this instant are reclaimed.
      * @param limit Maximum number of items to reclaim.
      * @return List of reclaimed [WorkItem]s (at most [limit]).
      */
     suspend fun reclaimExpiredLeases(
-        nowEpochMs: Long,
+        now: Instant,
         limit: Int,
     ): List<WorkItem>
 }

@@ -4,6 +4,8 @@ import io.github.fpaschos.pipekt.core.IngressRecord
 import io.github.fpaschos.pipekt.core.WorkItemStatus
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import kotlin.time.Instant
+import kotlin.time.Duration
 
 /**
  * Contract coverage for the [DurableStore] SPI surface.
@@ -22,15 +24,15 @@ class DurableStoreContractTest :
                     override suspend fun getOrCreateRun(
                         pipeline: String,
                         planVersion: String,
-                        nowMs: Long,
+                        now: Instant,
                     ): RunRecord =
                         RunRecord(
                             id = "run-1",
                             pipeline = pipeline,
                             planVersion = planVersion,
                             status = "ACTIVE",
-                            createdAtMs = nowMs,
-                            updatedAtMs = nowMs,
+                            createdAt = now,
+                            updatedAt = now,
                         )
 
                     override suspend fun getRun(runId: String): RunRecord? = null
@@ -40,55 +42,58 @@ class DurableStoreContractTest :
                     override suspend fun appendIngress(
                         runId: String,
                         records: List<IngressRecord<*>>,
-                        nowMs: Long,
+                        now: Instant,
                     ): AppendIngressResult = AppendIngressResult(appended = 0, duplicates = 0)
 
                     override suspend fun claim(
                         step: String,
                         runId: String,
                         limit: Int,
-                        leaseMs: Long,
+                        leaseDuration: Duration,
                         workerId: String,
+                        now: Instant,
                     ): List<WorkItem> = emptyList()
 
                     override suspend fun checkpointSuccess(
                         item: WorkItem,
                         outputJson: String,
                         nextStep: String?,
-                        nowMs: Long,
+                        now: Instant,
                     ) = Unit
 
                     override suspend fun checkpointFiltered(
                         item: WorkItem,
                         reason: String,
-                        nowMs: Long,
+                        now: Instant,
                     ) = Unit
 
                     override suspend fun checkpointFailure(
                         item: WorkItem,
                         errorJson: String,
-                        retryAtEpochMs: Long?,
-                        nowMs: Long,
+                        retryAt: Instant?,
+                        now: Instant,
                     ) = Unit
 
                     override suspend fun countNonTerminal(runId: String): Int = 0
 
                     override suspend fun reclaimExpiredLeases(
-                        nowEpochMs: Long,
+                        now: Instant,
                         limit: Int,
                     ): List<WorkItem> = emptyList()
                 }
 
-            val run =
-                store.getOrCreateRun("p", "v1", 1000L)
+            val t1 = Instant.fromEpochMilliseconds(1000L)
+            val t2 = Instant.fromEpochMilliseconds(2000L)
+            val t3 = Instant.fromEpochMilliseconds(3000L)
+
+            val run = store.getOrCreateRun("p", "v1", t1)
             run.pipeline.shouldBe("p")
             store.getRun("run-1") shouldBe null
             store.listActiveRuns("p") shouldBe emptyList()
-            val appendResult =
-                store.appendIngress("run-1", emptyList(), 1000L)
+            val appendResult = store.appendIngress("run-1", emptyList(), t1)
             appendResult.appended.shouldBe(0)
             appendResult.duplicates.shouldBe(0)
-            store.claim("step1", "run-1", 10, 5000L, "worker-1") shouldBe emptyList()
+            store.claim("step1", "run-1", 10, Duration.parse("5s"), "worker-1", t1) shouldBe emptyList()
             val item =
                 WorkItem(
                     id = "i1",
@@ -100,15 +105,15 @@ class DurableStoreContractTest :
                     lastErrorJson = null,
                     attemptCount = 0,
                     leaseOwner = null,
-                    leaseExpiryMs = null,
-                    retryAtMs = null,
-                    createdAtMs = 1000L,
-                    updatedAtMs = 1000L,
+                    leaseExpiry = null,
+                    retryAt = null,
+                    createdAt = t1,
+                    updatedAt = t1,
                 )
-            store.checkpointSuccess(item, "{}", "step2", 2000L)
-            store.checkpointFiltered(item, "reason", 2000L)
-            store.checkpointFailure(item, "err", null, 2000L)
+            store.checkpointSuccess(item, "{}", "step2", t2)
+            store.checkpointFiltered(item, "reason", t2)
+            store.checkpointFailure(item, "err", null, t2)
             store.countNonTerminal("run-1").shouldBe(0)
-            store.reclaimExpiredLeases(3000L, 10) shouldBe emptyList()
+            store.reclaimExpiredLeases(t3, 10) shouldBe emptyList()
         }
     })

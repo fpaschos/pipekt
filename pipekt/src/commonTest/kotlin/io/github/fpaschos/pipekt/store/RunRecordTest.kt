@@ -1,9 +1,10 @@
 package io.github.fpaschos.pipekt.store
 
 import io.kotest.core.spec.style.FunSpec
-import io.kotest.matchers.longs.shouldBeGreaterThan
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldNotBeBlank
+import kotlin.time.Instant
 
 /**
  * Contract coverage for [RunRecord] as a persistent entity.
@@ -17,20 +18,22 @@ class RunRecordTest :
     FunSpec({
 
         test("run record exposes minimum required fields") {
+            val createdAt = Instant.fromEpochMilliseconds(1000L)
+            val updatedAt = Instant.fromEpochMilliseconds(2000L)
             val r =
                 RunRecord(
                     id = "run-1",
                     pipeline = "p",
                     planVersion = "v1",
                     status = "ACTIVE",
-                    createdAtMs = 1000L,
-                    updatedAtMs = 2000L,
+                    createdAt = createdAt,
+                    updatedAt = updatedAt,
                 )
             r.id.shouldNotBeBlank()
             r.pipeline.shouldBe("p")
             r.planVersion.shouldBe("v1")
             r.status.shouldBe("ACTIVE")
-            r.createdAtMs.shouldBeGreaterThan(0L)
-            r.updatedAtMs.shouldBeGreaterThan(0L)
+            r.createdAt.shouldNotBe(null)
+            r.updatedAt.shouldNotBe(null)
         }
     })
