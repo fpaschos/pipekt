@@ -3,6 +3,9 @@ package io.github.fpaschos.pipekt.store
 /**
  * Persistent run record for a pipeline execution.
  *
+ * Immutable value type produced by [DurableStore]. Identifies a single execution of a pipeline
+ * and its plan version for compatibility and resumability.
+ *
  * @param id Unique run id.
  * @param pipeline Pipeline name.
  * @param planVersion Version of the pipeline plan (for compatibility).

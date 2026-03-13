@@ -3,8 +3,11 @@ package io.github.fpaschos.pipekt.store
 /**
  * Result of a bulk [DurableStore.appendIngress] call.
  *
+ * Sum of [appended] and [duplicates] may be less than the input list size if the implementation
+ * skips or fails on some records; otherwise it equals the number of records passed in.
+ *
  * @param appended Number of records inserted.
- * @param duplicates Number of records skipped (already present for same (runId, sourceId).
+ * @param duplicates Number of records skipped (already present for same (runId, sourceId)).
  */
 data class AppendIngressResult(
     val appended: Int,
