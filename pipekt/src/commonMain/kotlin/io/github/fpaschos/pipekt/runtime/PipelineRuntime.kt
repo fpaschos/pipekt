@@ -67,11 +67,11 @@ import kotlin.uuid.Uuid
  * `plans/streams-delivery-phases.md` (Phase 1D), and
  * `plans/streams-technical-requirements.md` (defaults and recommended ranges).
  *
- * @param definition Validated pipeline to execute.
+ * @param pipeline Validated pipeline to execute.
  * @param store Store implementation; Phase 1 supports [InMemoryStore] only (Phase 3 adds PostgresStore).
  * @param serializer [PayloadSerializer] for payload serialization at ingestion and deserialization at execution.
  * @param scope [CoroutineScope] on which all runtime loops are launched. Inject a [TestScope] for deterministic testing.
- * @param planVersion Version key passed to [DurableStore.getOrCreateRun]; bump on incompatible plan changes.
+ * @param planVersion Version key passed to [DurableStore.findOrCreateRun]; bump on incompatible plan changes.
  * @param workerPollInterval How often the ingestion and worker loops poll when idle (default 10ms; use 100–500ms in production).
  * @param watchdogInterval How often the watchdog calls [DurableStore.reclaimExpiredLeases] (default 50ms; use 1–5s in production).
  * @param leaseDuration How long a claimed item's lease lasts before the watchdog may reclaim it (default 30s).
@@ -79,7 +79,7 @@ import kotlin.uuid.Uuid
  */
 @OptIn(ExperimentalUuidApi::class)
 class PipelineRuntime(
-    val definition: PipelineDefinition,
+    val pipeline: PipelineDefinition,
     val store: DurableStore,
     val serializer: PayloadSerializer,
     val scope: CoroutineScope,
@@ -92,7 +92,7 @@ class PipelineRuntime(
     private val workerId: String = Uuid.random().toString()
     private val jobs = mutableListOf<Job>()
 
-    /** The run id obtained from [DurableStore.getOrCreateRun] on [start]. */
+    /** The run id obtained from [DurableStore.findOrCreateRun] on [start]. */
     private lateinit var runId: String
 
     /**
@@ -101,11 +101,11 @@ class PipelineRuntime(
      */
     @Suppress("UNCHECKED_CAST")
     private val executableOps: List<ExecutableOp> by lazy {
-        definition.operators.map { op ->
+        pipeline.operators.mapNotNull { op ->
             when (op) {
                 is StepDef<*, *> -> StepExecutable(op as StepDef<Any?, Any?>)
                 is FilterDef<*> -> FilterExecutable(op as FilterDef<Any?>)
-                is SourceDef<*> -> error("Pipeline '${definition.name}' has a SourceDef validation should have failed")
+                is SourceDef<*> -> null // Validated pipelines have no sources in operators
             }
         }
     }
@@ -123,12 +123,12 @@ class PipelineRuntime(
      * then launches the ingestion loop, worker loops, and watchdog loop.
      */
     suspend fun start() {
-        val run = store.getOrCreateRun(definition.name, planVersion)
+        val run = store.findOrCreateRun(pipeline.name, planVersion)
         runId = run.id
         store.reclaimExpiredLeases(Clock.System.now(), limit = Int.MAX_VALUE)
-        launchIngestionLoop()
-        launchWorkerLoops()
-        launchWatchdogLoop()
+        launchIngestion()
+        launchWorkers()
+        launchWatchdog()
     }
 
     /**
@@ -147,16 +147,16 @@ class PipelineRuntime(
     // ── Ingestion loop ─────────────────────────────────────────────────────────
 
     @Suppress("UNCHECKED_CAST")
-    private fun launchIngestionLoop() {
+    private fun launchIngestion() {
         val firstStepName = executableOps.firstOrNull()?.stepName ?: return
-        val adapter = definition.source.adapter as SourceAdapter<Any?>
+        val adapter = pipeline.source.adapter as SourceAdapter<Any?>
 
         jobs +=
             scope.launch {
                 while (isActive) {
                     val nonTerminal = store.countNonTerminal(runId)
-                    if (nonTerminal < definition.maxInFlight) {
-                        val maxPoll = definition.maxInFlight - nonTerminal
+                    if (nonTerminal < pipeline.maxInFlight) {
+                        val maxPoll = pipeline.maxInFlight - nonTerminal
                         val records = adapter.poll(maxPoll)
                         if (records.isNotEmpty()) {
                             val ingress: List<IngressRecord<*>> =
@@ -181,7 +181,7 @@ class PipelineRuntime(
      * Launches one worker loop per [ExecutableOp]. The list is already built with an exhaustive
      * [when] over [OperatorDef]; no branching here.
      */
-    private fun launchWorkerLoops() {
+    private fun launchWorkers() {
         executableOps.forEachIndexed { index, exe ->
             val nextStepName = executableOps.getOrNull(index + 1)?.stepName
             launchWorker(exe, nextStepName)
@@ -237,7 +237,7 @@ class PipelineRuntime(
 
     // ── Watchdog loop ──────────────────────────────────────────────────────────
 
-    private fun launchWatchdogLoop() {
+    private fun launchWatchdog() {
         jobs +=
             scope.launch {
                 while (isActive) {
@@ -250,7 +250,7 @@ class PipelineRuntime(
     // ── Helpers ────────────────────────────────────────────────────────────────
 
     /**
-     * Shared Arrow  and context helper used by all [ExecutableOp] implementations.
+     * Shared Arrow and context helper used by all [ExecutableOp] implementations.
      *
      * Deserializes [item]'s `payloadJson` to [I] using [inputType], constructs a [StepCtx],
      * then executes [block] inside an `either {}` scope with the ctx in context. The resulting
@@ -281,7 +281,7 @@ class PipelineRuntime(
         stepName: String,
     ): StepCtx =
         StepCtx(
-            pipelineName = definition.name,
+            pipelineName = pipeline.name,
             runId = runId,
             itemId = item.id,
             itemKey = item.sourceId,

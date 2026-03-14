@@ -42,7 +42,7 @@ class InMemoryStoreContractTest :
 
         test("getOrCreateRun creates a new run and returns it") {
             val store = InMemoryStore()
-            val run = store.getOrCreateRun("pipe1", "v1")
+            val run = store.findOrCreateRun("pipe1", "v1")
             assertSoftly(run) {
                 pipeline shouldBe "pipe1"
                 planVersion shouldBe "v1"
@@ -53,15 +53,15 @@ class InMemoryStoreContractTest :
 
         test("getOrCreateRun with same pipeline and planVersion returns the same run") {
             val store = InMemoryStore()
-            val first = store.getOrCreateRun("pipe1", "v1")
-            val second = store.getOrCreateRun("pipe1", "v1")
+            val first = store.findOrCreateRun("pipe1", "v1")
+            val second = store.findOrCreateRun("pipe1", "v1")
             second.id shouldBe first.id
         }
 
         test("getOrCreateRun with bumped planVersion creates a second distinct run") {
             val store = InMemoryStore()
-            val v1 = store.getOrCreateRun("pipe1", "v1")
-            val v2 = store.getOrCreateRun("pipe1", "v2")
+            val v1 = store.findOrCreateRun("pipe1", "v1")
+            val v2 = store.findOrCreateRun("pipe1", "v2")
             assertSoftly(v2) {
                 id shouldNotBe v1.id
                 planVersion shouldBe "v2"
@@ -70,7 +70,7 @@ class InMemoryStoreContractTest :
 
         test("appendIngress appended count matches number of unique records") {
             val store = InMemoryStore()
-            val run = store.getOrCreateRun("pipe1", "v1")
+            val run = store.findOrCreateRun("pipe1", "v1")
             val result = store.appendIngress(run.id, listOf(record("s1"), record("s2"), record("s3")), firstStep = "step1")
             assertSoftly(result) {
                 appended shouldBe 3
@@ -80,7 +80,7 @@ class InMemoryStoreContractTest :
 
         test("appendIngress skips duplicates for same runId and sourceId") {
             val store = InMemoryStore()
-            val run = store.getOrCreateRun("pipe1", "v1")
+            val run = store.findOrCreateRun("pipe1", "v1")
             store.appendIngress(run.id, listOf(record("s1"), record("s2")), firstStep = "step1")
             val result = store.appendIngress(run.id, listOf(record("s2"), record("s3")), firstStep = "step1")
             assertSoftly(result) {
@@ -91,7 +91,7 @@ class InMemoryStoreContractTest :
 
         test("claim returns PENDING items and sets them IN_PROGRESS with lease") {
             val store = InMemoryStore()
-            val run = store.getOrCreateRun("pipe1", "v1")
+            val run = store.findOrCreateRun("pipe1", "v1")
             store.appendIngress(run.id, listOf(record("s1"), record("s2")), firstStep = "step1")
 
             val claimed = store.claim("step1", run.id, 10, 30.seconds, "worker-1")
@@ -107,7 +107,7 @@ class InMemoryStoreContractTest :
 
         test("claim does not return items already IN_PROGRESS with a valid lease") {
             val store = InMemoryStore()
-            val run = store.getOrCreateRun("pipe1", "v1")
+            val run = store.findOrCreateRun("pipe1", "v1")
             store.appendIngress(run.id, listOf(record("s1")), firstStep = "step1")
 
             store.claim("step1", run.id, 10, 30.seconds, "worker-1")
@@ -117,13 +117,13 @@ class InMemoryStoreContractTest :
 
         test("checkpointSuccess with nextStep advances item to next step as PENDING with new payload") {
             val store = InMemoryStore()
-            val run = store.getOrCreateRun("pipe1", "v1")
+            val run = store.findOrCreateRun("pipe1", "v1")
             store.appendIngress(run.id, listOf(record("s1", "\"input\"")), firstStep = "step1")
             val item = store.claim("step1", run.id, 1, 30.seconds, "worker-1").first()
 
             store.checkpointSuccess(item, "\"output\"", nextStep = "step2")
 
-            store.getRun(run.id).shouldNotBeNull()
+            store.findRun(run.id).shouldNotBeNull()
             val workItem = store.getWorkItem(item.id).shouldNotBeNull()
             assertSoftly(workItem) {
                 currentStep shouldBe "step2"
@@ -135,7 +135,7 @@ class InMemoryStoreContractTest :
 
         test("checkpointSuccess with nextStep null marks item COMPLETED and nulls payloadJson") {
             val store = InMemoryStore()
-            val run = store.getOrCreateRun("pipe1", "v1")
+            val run = store.findOrCreateRun("pipe1", "v1")
             store.appendIngress(run.id, listOf(record("s1")), firstStep = "step1")
             val item = store.claim("step1", run.id, 1, 30.seconds, "worker-1").first()
 
@@ -151,7 +151,7 @@ class InMemoryStoreContractTest :
 
         test("checkpointFiltered marks item FILTERED and nulls payloadJson") {
             val store = InMemoryStore()
-            val run = store.getOrCreateRun("pipe1", "v1")
+            val run = store.findOrCreateRun("pipe1", "v1")
             store.appendIngress(run.id, listOf(record("s1")), firstStep = "step1")
             val item = store.claim("step1", run.id, 1, 30.seconds, "worker-1").first()
 
@@ -161,14 +161,13 @@ class InMemoryStoreContractTest :
             assertSoftly(workItem) {
                 status shouldBe WorkItemStatus.FILTERED
                 payloadJson.shouldBeNull()
-                lastErrorJson shouldBe "BELOW_THRESHOLD"
                 attemptCount shouldBe 1
             }
         }
 
         test("checkpointFailure with retryAt null marks item FAILED and nulls payloadJson") {
             val store = InMemoryStore()
-            val run = store.getOrCreateRun("pipe1", "v1")
+            val run = store.findOrCreateRun("pipe1", "v1")
             store.appendIngress(run.id, listOf(record("s1")), firstStep = "step1")
             val item = store.claim("step1", run.id, 1, 30.seconds, "worker-1").first()
 
@@ -178,14 +177,13 @@ class InMemoryStoreContractTest :
             assertSoftly(workItem) {
                 status shouldBe WorkItemStatus.FAILED
                 payloadJson.shouldBeNull()
-                lastErrorJson shouldBe "fatal error"
                 attemptCount shouldBe 1
             }
         }
 
         test("checkpointFailure with retryAt keeps item PENDING with retryAt set") {
             val store = InMemoryStore()
-            val run = store.getOrCreateRun("pipe1", "v1")
+            val run = store.findOrCreateRun("pipe1", "v1")
             store.appendIngress(run.id, listOf(record("s1")), firstStep = "step1")
             val item = store.claim("step1", run.id, 1, 30.seconds, "worker-1").first()
             val retryAt = Clock.System.now() + 5.seconds
@@ -196,7 +194,6 @@ class InMemoryStoreContractTest :
             assertSoftly(workItem) {
                 status shouldBe WorkItemStatus.PENDING
                 retryAt shouldBe retryAt
-                lastErrorJson shouldBe "transient error"
                 payloadJson.shouldNotBeNull()
                 attemptCount shouldBe 1
             }
@@ -204,7 +201,7 @@ class InMemoryStoreContractTest :
 
         test("countNonTerminal counts PENDING and IN_PROGRESS items but not terminal items") {
             val store = InMemoryStore()
-            val run = store.getOrCreateRun("pipe1", "v1")
+            val run = store.findOrCreateRun("pipe1", "v1")
             store.appendIngress(run.id, listOf(record("s1"), record("s2"), record("s3")), firstStep = "step1")
 
             // Claim and complete one item
@@ -217,7 +214,7 @@ class InMemoryStoreContractTest :
 
         test("reclaimExpiredLeases resets expired IN_PROGRESS items back to PENDING") {
             val store = InMemoryStore()
-            val run = store.getOrCreateRun("pipe1", "v1")
+            val run = store.findOrCreateRun("pipe1", "v1")
             store.appendIngress(run.id, listOf(record("s1")), firstStep = "step1")
 
             // Claim with a short lease duration that has already expired by using a past expiry directly

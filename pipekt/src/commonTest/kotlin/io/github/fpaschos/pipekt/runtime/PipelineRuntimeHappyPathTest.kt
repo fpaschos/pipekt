@@ -1,6 +1,5 @@
 package io.github.fpaschos.pipekt.runtime
 
-import arrow.core.getOrElse
 import io.github.fpaschos.pipekt.core.FakeSourceAdapter
 import io.github.fpaschos.pipekt.core.KotlinxPayloadSerializer
 import io.github.fpaschos.pipekt.core.SourceRecord
@@ -8,6 +7,7 @@ import io.github.fpaschos.pipekt.core.WorkItemStatus
 import io.github.fpaschos.pipekt.core.pipeline
 import io.github.fpaschos.pipekt.store.InMemoryStore
 import io.kotest.assertions.arrow.core.shouldBeRight
+import io.kotest.assertions.assertSoftly
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.nulls.shouldBeNull
@@ -71,7 +71,7 @@ class PipelineRuntimeHappyPathTest :
             runTest(StandardTestDispatcher()) {
                 val runtime =
                     PipelineRuntime(
-                        definition = definition,
+                        pipeline = definition,
                         store = store,
                         serializer = serializer,
                         scope = this,
@@ -84,12 +84,16 @@ class PipelineRuntimeHappyPathTest :
                 advanceUntilIdle()
             }
 
-            val run = store.listActiveRuns("test-pipeline").first()
+            val run = store.findAllActiveRuns("test-pipeline").first()
             store.countNonTerminal(run.id) shouldBe 0
-            store.getWorkItemBySourceId(run.id, "s1")?.status shouldBe WorkItemStatus.COMPLETED
-            store.getWorkItemBySourceId(run.id, "s2")?.status shouldBe WorkItemStatus.COMPLETED
-            store.getWorkItemBySourceId(run.id, "s1")?.payloadJson.shouldBeNull()
-            store.getWorkItemBySourceId(run.id, "s2")?.payloadJson.shouldBeNull()
+            assertSoftly(store.getWorkItemBySourceId(run.id, "s1")!!) {
+                status shouldBe WorkItemStatus.COMPLETED
+                payloadJson.shouldBeNull()
+            }
+            assertSoftly(store.getWorkItemBySourceId(run.id, "s2")!!) {
+                status shouldBe WorkItemStatus.COMPLETED
+                payloadJson.shouldBeNull()
+            }
         }
 
         test("two-step pipeline: items advance through both steps and reach COMPLETED") {
@@ -108,7 +112,7 @@ class PipelineRuntimeHappyPathTest :
             runTest(StandardTestDispatcher()) {
                 val runtime =
                     PipelineRuntime(
-                        definition = definition,
+                        pipeline = definition,
                         store = store,
                         serializer = serializer,
                         scope = this,
@@ -121,11 +125,13 @@ class PipelineRuntimeHappyPathTest :
                 advanceUntilIdle()
             }
 
-            val run = store.listActiveRuns("two-step-pipe").first()
+            val run = store.findAllActiveRuns("two-step-pipe").first()
             store.countNonTerminal(run.id) shouldBe 0
-            val item = store.getWorkItemBySourceId(run.id, "s1")
-            item?.status shouldBe WorkItemStatus.COMPLETED
-            item?.payloadJson.shouldBeNull()
+            val item = store.getWorkItemBySourceId(run.id, "s1")!!
+            assertSoftly(item) {
+                status shouldBe WorkItemStatus.COMPLETED
+                payloadJson.shouldBeNull()
+            }
         }
 
         test("filter step: items failing the predicate reach FILTERED with null payloadJson") {
@@ -147,7 +153,7 @@ class PipelineRuntimeHappyPathTest :
             runTest(StandardTestDispatcher()) {
                 val runtime =
                     PipelineRuntime(
-                        definition = definition,
+                        pipeline = definition,
                         store = store,
                         serializer = serializer,
                         scope = this,
@@ -160,11 +166,15 @@ class PipelineRuntimeHappyPathTest :
                 advanceUntilIdle()
             }
 
-            val run = store.listActiveRuns("filter-pipe").first()
-            store.getWorkItemBySourceId(run.id, "s1")!!.status shouldBe WorkItemStatus.COMPLETED
+            val run = store.findAllActiveRuns("filter-pipe").first()
+            assertSoftly(store.getWorkItemBySourceId(run.id, "s1")!!) {
+                status shouldBe WorkItemStatus.COMPLETED
+            }
             val dropped = store.getWorkItemBySourceId(run.id, "s2")!!
-            dropped.status shouldBe WorkItemStatus.FILTERED
-            dropped.payloadJson.shouldBeNull()
+            assertSoftly(dropped) {
+                status shouldBe WorkItemStatus.FILTERED
+                payloadJson.shouldBeNull()
+            }
         }
 
         test("duplicate ingress: same sourceId fed twice results in exactly one WorkItem") {
@@ -185,7 +195,7 @@ class PipelineRuntimeHappyPathTest :
             runTest(StandardTestDispatcher()) {
                 val runtime =
                     PipelineRuntime(
-                        definition = definition,
+                        pipeline = definition,
                         store = store,
                         serializer = serializer,
                         scope = this,
@@ -198,9 +208,11 @@ class PipelineRuntimeHappyPathTest :
                 advanceUntilIdle()
             }
 
-            val run = store.listActiveRuns("dedup-pipe").first()
+            val run = store.findAllActiveRuns("dedup-pipe").first()
             val allItems = store.getAllWorkItems(run.id)
             allItems shouldHaveSize 1
-            allItems.first().status shouldBe WorkItemStatus.COMPLETED
+            assertSoftly(allItems.first()) {
+                status shouldBe WorkItemStatus.COMPLETED
+            }
         }
     })

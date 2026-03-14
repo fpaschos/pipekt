@@ -42,14 +42,14 @@ class InMemoryStore : DurableStore {
     /**
      * Returns the existing active run for `(pipeline, planVersion)` or creates a new run.
      *
-     * Implements [DurableStore.getOrCreateRun]. This implementation uses a single mutex;
+     * Implements [DurableStore.findOrCreateRun]. This implementation uses a single mutex;
      * lookup and creation are atomic. Run ids are generated via [Uuid].
      *
      * @param pipeline Pipeline name.
      * @param planVersion Version of the pipeline plan (for compatibility and schema evolution).
      * @return The run record; newly created or existing matching run.
      */
-    override suspend fun getOrCreateRun(
+    override suspend fun findOrCreateRun(
         pipeline: String,
         planVersion: String,
     ): RunRecord =
@@ -71,22 +71,22 @@ class InMemoryStore : DurableStore {
     /**
      * Loads a run by id.
      *
-     * Implements [DurableStore.getRun].
+     * Implements [DurableStore.findRun].
      *
      * @param runId Unique run identifier.
      * @return The run record, or null if not found.
      */
-    override suspend fun getRun(runId: String): RunRecord? = mutex.withLock { runs[runId] }
+    override suspend fun findRun(runId: String): RunRecord? = mutex.withLock { runs[runId] }
 
     /**
      * Lists runs for the pipeline that are considered active (not [RunRecord.STATUS_FAILED]).
      *
-     * Implements [DurableStore.listActiveRuns]. Order is unspecified.
+     * Implements [DurableStore.findAllActiveRuns]. Order is unspecified.
      *
      * @param pipeline Pipeline name.
      * @return List of active run records.
      */
-    override suspend fun listActiveRuns(pipeline: String): List<RunRecord> =
+    override suspend fun findAllActiveRuns(pipeline: String): List<RunRecord> =
         mutex.withLock {
             runs.values.filter { it.pipeline == pipeline && it.status != RunRecord.STATUS_FAILED }
         }
@@ -127,7 +127,6 @@ class InMemoryStore : DurableStore {
                             currentStep = firstStep,
                             status = WorkItemStatus.PENDING,
                             payloadJson = record.payload as? String,
-                            lastErrorJson = null,
                             attemptCount = 0,
                             leaseOwner = null,
                             leaseExpiry = null,
@@ -248,7 +247,6 @@ class InMemoryStore : DurableStore {
                 item.copy(
                     status = WorkItemStatus.FILTERED,
                     payloadJson = null,
-                    lastErrorJson = reason,
                     leaseOwner = null,
                     leaseExpiry = null,
                     attemptCount = item.attemptCount + 1,
@@ -280,7 +278,6 @@ class InMemoryStore : DurableStore {
                     // Retryable: keep payload, schedule retry
                     item.copy(
                         status = WorkItemStatus.PENDING,
-                        lastErrorJson = errorJson,
                         retryAt = retryAt,
                         leaseOwner = null,
                         leaseExpiry = null,
@@ -292,7 +289,6 @@ class InMemoryStore : DurableStore {
                     item.copy(
                         status = WorkItemStatus.FAILED,
                         payloadJson = null,
-                        lastErrorJson = errorJson,
                         leaseOwner = null,
                         leaseExpiry = null,
                         attemptCount = item.attemptCount + 1,

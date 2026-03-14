@@ -27,7 +27,7 @@ class DurableStoreContractTest :
 
             val store =
                 object : DurableStore {
-                    override suspend fun getOrCreateRun(
+                    override suspend fun findOrCreateRun(
                         pipeline: String,
                         planVersion: String,
                     ): RunRecord =
@@ -40,9 +40,9 @@ class DurableStoreContractTest :
                             updatedAt = t1,
                         )
 
-                    override suspend fun getRun(runId: String): RunRecord? = null
+                    override suspend fun findRun(runId: String): RunRecord? = null
 
-                    override suspend fun listActiveRuns(pipeline: String): List<RunRecord> = emptyList()
+                    override suspend fun findAllActiveRuns(pipeline: String): List<RunRecord> = emptyList()
 
                     override suspend fun appendIngress(
                         runId: String,
@@ -85,12 +85,12 @@ class DurableStoreContractTest :
 
             val t3 = Instant.fromEpochMilliseconds(3000L)
 
-            val run = store.getOrCreateRun("p", "v1")
+            val run = store.findOrCreateRun("p", "v1")
             assertSoftly(run) {
                 pipeline shouldBe "p"
             }
-            store.getRun("run-1") shouldBe null
-            store.listActiveRuns("p") shouldBe emptyList()
+            store.findRun("run-1") shouldBe null
+            store.findAllActiveRuns("p") shouldBe emptyList()
             val appendResult = store.appendIngress("run-1", emptyList())
             assertSoftly(appendResult) {
                 appended shouldBe 0
@@ -105,7 +105,6 @@ class DurableStoreContractTest :
                     currentStep = "step1",
                     status = WorkItemStatus.PENDING,
                     payloadJson = "{}",
-                    lastErrorJson = null,
                     attemptCount = 0,
                     leaseOwner = null,
                     leaseExpiry = null,

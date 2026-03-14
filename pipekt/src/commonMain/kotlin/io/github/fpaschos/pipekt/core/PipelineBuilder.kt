@@ -112,7 +112,6 @@ class PipelineBuilder<T>(
                 predicate = predicate as StepFn<Any?, Boolean>,
                 inputType = typeOf<I>(),
             )
-        // filter is transparent — currentOutputType unchanged
     }
 
     /**

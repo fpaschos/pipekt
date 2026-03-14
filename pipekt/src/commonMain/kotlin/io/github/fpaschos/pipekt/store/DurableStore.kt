@@ -26,9 +26,9 @@ interface DurableStore {
      *
      * @param pipeline Pipeline name.
      * @param planVersion Version of the pipeline plan (for compatibility and schema evolution).
-     * @return The run record; newly created or existing matching run.
+     * @return The run record
      */
-    suspend fun getOrCreateRun(
+    suspend fun findOrCreateRun(
         pipeline: String,
         planVersion: String,
     ): RunRecord
@@ -39,7 +39,7 @@ interface DurableStore {
      * @param runId Unique run identifier.
      * @return The run record, or null if not found.
      */
-    suspend fun getRun(runId: String): RunRecord?
+    suspend fun findRun(runId: String): RunRecord?
 
     /**
      * Lists runs for the pipeline that are considered active (e.g. not terminal).
@@ -47,7 +47,7 @@ interface DurableStore {
      * @param pipeline Pipeline name.
      * @return List of active run records, in an implementation-defined order.
      */
-    suspend fun listActiveRuns(pipeline: String): List<RunRecord>
+    suspend fun findAllActiveRuns(pipeline: String): List<RunRecord>
 
     /**
      * Appends ingested records to a run; duplicates for the same `(runId, sourceId)` are skipped.
