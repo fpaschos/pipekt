@@ -24,9 +24,7 @@ import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlin.reflect.KType
 import kotlin.time.Clock
-import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
@@ -53,15 +51,11 @@ import kotlin.uuid.Uuid
  * (`context(Raise<ItemFailure>, StepCtx)`). The runtime constructs both contexts and invokes the
  * function via `either { with(ctx) { fn(input) } }`.
  *
- * **Lease duration:** worker loops claim items with a fixed 30-second lease. Override via
- * [leaseDuration] when constructing for longer-running steps (see `plans/streams-technical-requirements.md`).
+ * **Config:** Tuning (poll intervals, lease duration, claim limit) is passed via [RuntimeConfig] to [start].
  *
  * **[FilterDef] semantics:** the predicate returns `Boolean` — `true` keeps the item (advances to
  * the next step), `false` filters it out. A raised [ItemFailure] that [ItemFailure.isFiltered]
  * also filters; other failures are handled as errors.
- *
- * **Worker claim limit:** each worker loop claims up to [workerClaimLimit] items per poll cycle.
- * Default is 10; increase for higher throughput (see `plans/streams-technical-requirements.md`).
  *
  * See `plans/streams-contracts-v1.md` (Pipeline Runtime section),
  * `plans/streams-delivery-phases.md` (Phase 1D), and
@@ -72,10 +66,6 @@ import kotlin.uuid.Uuid
  * @param serializer [PayloadSerializer] for payload serialization at ingestion and deserialization at execution.
  * @param scope [CoroutineScope] on which all runtime loops are launched. Inject a [TestScope] for deterministic testing.
  * @param planVersion Version key passed to [DurableStore.findOrCreateRun]; bump on incompatible plan changes.
- * @param workerPollInterval How often the ingestion and worker loops poll when idle (default 10ms; use 100–500ms in production).
- * @param watchdogInterval How often the watchdog calls [DurableStore.reclaimExpiredLeases] (default 50ms; use 1–5s in production).
- * @param leaseDuration How long a claimed item's lease lasts before the watchdog may reclaim it (default 30s).
- * @param workerClaimLimit Maximum items claimed per worker loop per poll cycle (default 10).
  */
 @OptIn(ExperimentalUuidApi::class)
 class PipelineRuntime(
@@ -84,16 +74,15 @@ class PipelineRuntime(
     val serializer: PayloadSerializer,
     val scope: CoroutineScope,
     val planVersion: String = "v1",
-    val workerPollInterval: Duration = 10.milliseconds,
-    val watchdogInterval: Duration = 50.milliseconds,
-    val leaseDuration: Duration = 30.seconds,
-    val workerClaimLimit: Int = 10,
 ) {
     private val workerId: String = Uuid.random().toString()
     private val jobs = mutableListOf<Job>()
 
     /** The run id obtained from [DurableStore.findOrCreateRun] on [start]. */
     private lateinit var runId: String
+
+    /** Config for the current run; set at [start] and used by all loops for the lifetime of the run. */
+    private lateinit var config: RuntimeConfig
 
     /**
      * Precomputed ordered list of executable operators ([StepDef] and [FilterDef] only).
@@ -119,10 +108,12 @@ class PipelineRuntime(
     }
 
     /**
-     * Starts the runtime: obtains or creates the long-lived run, reclaims any expired leases,
-     * then launches the ingestion loop, worker loops, and watchdog loop.
+     * Starts the runtime: applies [config], obtains or creates the long-lived run, reclaims any
+     * expired leases, then launches the ingestion loop, worker loops, and watchdog loop.
+     * Call [stop] before calling [start] again.
      */
-    suspend fun start() {
+    suspend fun start(config: RuntimeConfig = RuntimeConfig()) {
+        this.config = config
         val run = store.findOrCreateRun(pipeline.name, planVersion)
         runId = run.id
         store.reclaimExpiredLeases(Clock.System.now(), limit = Int.MAX_VALUE)
@@ -170,7 +161,7 @@ class PipelineRuntime(
                             adapter.ack(records)
                         }
                     }
-                    delay(workerPollInterval)
+                    delay(config.workerPollInterval)
                 }
             }
     }
@@ -203,11 +194,11 @@ class PipelineRuntime(
         jobs +=
             scope.launch {
                 while (isActive) {
-                    val claimed = store.claim(exe.stepName, runId, workerClaimLimit, leaseDuration, workerId)
+                    val claimed = store.claim(exe.stepName, runId, config.workerClaimLimit, config.leaseDuration, workerId)
                     for (item in claimed) {
                         exe.executeAndCheckpoint(ctx, item, nextStepName)
                     }
-                    delay(workerPollInterval)
+                    delay(config.workerPollInterval)
                 }
             }
     }
@@ -241,7 +232,7 @@ class PipelineRuntime(
         jobs +=
             scope.launch {
                 while (isActive) {
-                    delay(watchdogInterval)
+                    delay(config.watchdogInterval)
                     store.reclaimExpiredLeases(Clock.System.now(), limit = 100)
                 }
             }

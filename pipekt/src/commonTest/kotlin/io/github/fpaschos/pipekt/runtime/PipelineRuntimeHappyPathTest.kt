@@ -75,10 +75,8 @@ class PipelineRuntimeHappyPathTest :
                         store = store,
                         serializer = serializer,
                         scope = this,
-                        workerPollInterval = 1.milliseconds,
-                        watchdogInterval = 5.milliseconds,
                     )
-                runtime.start()
+                runtime.start(RuntimeConfig(workerPollInterval = 1.milliseconds, watchdogInterval = 5.milliseconds))
                 advanceTimeBy(1.seconds)
                 runtime.stop()
                 advanceUntilIdle()
@@ -116,10 +114,8 @@ class PipelineRuntimeHappyPathTest :
                         store = store,
                         serializer = serializer,
                         scope = this,
-                        workerPollInterval = 1.milliseconds,
-                        watchdogInterval = 5.milliseconds,
                     )
-                runtime.start()
+                runtime.start(RuntimeConfig(workerPollInterval = 1.milliseconds, watchdogInterval = 5.milliseconds))
                 advanceTimeBy(1.seconds)
                 runtime.stop()
                 advanceUntilIdle()
@@ -157,10 +153,8 @@ class PipelineRuntimeHappyPathTest :
                         store = store,
                         serializer = serializer,
                         scope = this,
-                        workerPollInterval = 1.milliseconds,
-                        watchdogInterval = 5.milliseconds,
                     )
-                runtime.start()
+                runtime.start(RuntimeConfig(workerPollInterval = 1.milliseconds, watchdogInterval = 5.milliseconds))
                 advanceTimeBy(1.seconds)
                 runtime.stop()
                 advanceUntilIdle()
@@ -199,10 +193,8 @@ class PipelineRuntimeHappyPathTest :
                         store = store,
                         serializer = serializer,
                         scope = this,
-                        workerPollInterval = 1.milliseconds,
-                        watchdogInterval = 5.milliseconds,
                     )
-                runtime.start()
+                runtime.start(RuntimeConfig(workerPollInterval = 1.milliseconds, watchdogInterval = 5.milliseconds))
                 advanceTimeBy(1.seconds)
                 runtime.stop()
                 advanceUntilIdle()
