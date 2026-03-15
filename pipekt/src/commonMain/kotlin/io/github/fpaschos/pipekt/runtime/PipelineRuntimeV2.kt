@@ -2,6 +2,7 @@ package io.github.fpaschos.pipekt.runtime
 
 import io.github.fpaschos.pipekt.core.PayloadSerializer
 import io.github.fpaschos.pipekt.core.PipelineDefinition
+import io.github.fpaschos.pipekt.runtime.PipelineLifecycle.NEW
 import io.github.fpaschos.pipekt.store.DurableStore
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineName
@@ -13,124 +14,102 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * Lifecycle states for [PipelineRuntimeV2].
- */
-enum class PipelineRuntimeV2Lifecycle {
-    CREATED,
-    STARTING,
-    RUNNING,
-    STOPPING,
-    STOPPED,
-}
-
-/**
- * Minimal runtime state snapshot for observability while v2 is scaffolded.
- */
-data class PipelineRuntimeV2Snapshot(
-    val pipelineName: String,
-    val planVersion: String,
-    val lifecycle: PipelineRuntimeV2Lifecycle,
-)
-
-/**
- * Actor-backed runtime scaffold with business-intent API.
+ * Actor-backed runtime scaffold.
  *
- * Public methods expose only runtime intent (`start`, `stop`, `snapshot`). The actor-like command
- * protocol remains private to this class.
+ * Public API is intentionally small:
+ * - [start] starts runtime execution and returns a [RuntimeRef]
+ * - [shutdown] fully terminates runtime internals
  *
- * Atomic checkpoint and lease semantics are delegated to [DurableStore] through [PipelineRuntime]
- * and therefore keep the existing contracts unchanged.
- *
- * NOTE(v2 migration): while delegation is active, v1 runtime internals are reused as-is, including
- * its internal watchdog behavior. Full v2 extraction should remove that and keep watchdog ownership
- * exclusively at orchestrator/store level.
+ * Pipeline operations after start are performed through [RuntimeRef].
  */
-class PipelineRuntimeV2(
+internal class PipelineRuntimeV2(
     val pipeline: PipelineDefinition,
     val store: DurableStore,
     val serializer: PayloadSerializer,
-    val scope: CoroutineScope,
+    private val runtimeScope: CoroutineScope,
     val planVersion: String = "v1",
 ) {
+    companion object {
+        suspend fun spawn(
+            pipeline: PipelineDefinition,
+            planVersion: String,
+            deps: RuntimeDeps,
+            config: RuntimeConfig = RuntimeConfig(),
+        ): RuntimeRef {
+            val runtime =
+                PipelineRuntimeV2(
+                    pipeline = pipeline,
+                    planVersion = planVersion,
+                    runtimeScope = deps.scope,
+                    store = deps.store,
+                    serializer = deps.serializer,
+                )
+            return runtime.start(config)
+        }
+    }
+
     private val mailbox = Channel<Command>(Channel.BUFFERED)
-    private val bootstrapMutex = Mutex()
-    private var lifecycle: PipelineRuntimeV2Lifecycle = PipelineRuntimeV2Lifecycle.CREATED
+    private val lifecycleMutex = Mutex()
+
+    private var lifecycle: PipelineLifecycle = NEW
     private var delegate: PipelineRuntime? = null
-    private var controlLoopJob: Job? = null
+    private var commandsLoop: Job? = null
+    private var nextHandleId: Int = 0
+    private var activeHandle: RuntimeRef? = null
 
     /**
-     * Starts this pipeline runtime. Idempotent when already running.
+     * Starts runtime command loop (if needed), starts execution, and returns a pipeline handle.
+     *
+     * Idempotent while running: returns the existing active handle.
      */
-    suspend fun start(config: RuntimeConfig = RuntimeConfig()) {
-        ensureBootstrapped()
-        val reply = CompletableDeferred<Unit>()
-        mailbox.send(Command.Start(config, reply))
-        reply.await()
-    }
-
-    /**
-     * Stops this pipeline runtime. Idempotent when already stopped.
-     */
-    suspend fun stop() {
-        ensureBootstrapped()
-        val reply = CompletableDeferred<Unit>()
-        mailbox.send(Command.Stop(reply))
-        reply.await()
-    }
-
-    /**
-     * Returns runtime lifecycle snapshot.
-     */
-    suspend fun snapshot(): PipelineRuntimeV2Snapshot {
-        ensureBootstrapped()
-        val reply = CompletableDeferred<PipelineRuntimeV2Snapshot>()
-        mailbox.send(Command.Snapshot(reply))
-        return reply.await()
-    }
-
-    /**
-     * Graceful runtime shutdown for owner cleanup.
-     */
-    suspend fun shutdown() {
-        ensureBootstrapped()
-        val reply = CompletableDeferred<Unit>()
-        mailbox.send(Command.Shutdown(reply))
-        reply.await()
-        controlLoopJob?.join()
-    }
-
-    private suspend fun ensureBootstrapped() {
-        bootstrapMutex.withLock {
-            if (controlLoopJob != null) return
-            controlLoopJob =
-                scope.launch(CoroutineName("pipekt-runtime-v2-${pipeline.name}")) {
-                    for (command in mailbox) {
-                        when (command) {
-                            is Command.Start -> onStart(command)
-                            is Command.Stop -> onStop(command)
-                            is Command.Snapshot -> command.reply.complete(snapshotInternal())
-                            is Command.Shutdown -> onShutdown(command)
+    internal suspend fun start(config: RuntimeConfig = RuntimeConfig()): RuntimeRef {
+        lifecycleMutex.withLock {
+            if (commandsLoop == null) {
+                commandsLoop =
+                    runtimeScope.launch(CoroutineName("runtime-${pipeline.name}")) {
+                        for (command in mailbox) {
+                            when (command) {
+                                is Command.StartRuntime -> onStartRuntime(command)
+                                is Command.StopByHandle -> onStopByHandle(command)
+                                is Command.SnapshotByHandle -> onSnapshotByHandle(command)
+                                is Command.ShutdownRuntime -> onShutdownRuntime(command)
+                            }
                         }
                     }
-                }
+            }
+        }
+        return request(mailbox) { Command.StartRuntime(config, it) }
+    }
+
+    /**
+     * Fully terminates runtime internals and closes its mailbox.
+     */
+    suspend fun shutdown() {
+        ensureStarted()
+        request(mailbox) { Command.ShutdownRuntime(it) }
+        commandsLoop?.join()
+    }
+
+    /**
+     * Guard-only check: verifies runtime execution is currently running.
+     */
+    private fun ensureStarted() {
+        check(lifecycle == PipelineLifecycle.RUNNING) {
+            "PipelineRuntimeV2 is not running. Call start() first."
         }
     }
 
-    private suspend fun onStart(command: Command.Start) {
-        when (lifecycle) {
-            PipelineRuntimeV2Lifecycle.STARTING,
-            PipelineRuntimeV2Lifecycle.RUNNING,
-            -> {
-                command.reply.complete(Unit)
-                return
-            }
-            PipelineRuntimeV2Lifecycle.CREATED,
-            PipelineRuntimeV2Lifecycle.STOPPED,
-            PipelineRuntimeV2Lifecycle.STOPPING,
-            -> Unit
+    private suspend fun onStartRuntime(command: Command.StartRuntime) {
+        if (lifecycle == PipelineLifecycle.RUNNING) {
+            command.reply.complete(requireNotNull(activeHandle))
+            return
         }
-
-        lifecycle = PipelineRuntimeV2Lifecycle.STARTING
+        if (lifecycle == PipelineLifecycle.SHUTDOWN) {
+            command.reply.completeExceptionally(
+                IllegalStateException("PipelineRuntimeV2 is shutdown and cannot restart."),
+            )
+            return
+        }
 
         // TODO(v2): replace delegate with explicit child pipeline components and remove inherited
         // per-runtime watchdog behavior from v1 delegate usage.
@@ -139,84 +118,96 @@ class PipelineRuntimeV2(
                 pipeline = pipeline,
                 store = store,
                 serializer = serializer,
-                scope = scope,
+                scope = runtimeScope,
                 planVersion = planVersion,
             )
 
-        try {
+        completeSafe(command.reply) {
             runtime.start(command.config)
             delegate = runtime
-            lifecycle = PipelineRuntimeV2Lifecycle.RUNNING
-            command.reply.complete(Unit)
-        } catch (t: Throwable) {
-            lifecycle = PipelineRuntimeV2Lifecycle.STOPPED
-            command.reply.completeExceptionally(t)
+            lifecycle = PipelineLifecycle.RUNNING
+            val handleId = "rt-${++nextHandleId}"
+            val handle =
+                RuntimeRef(
+                    id = handleId,
+                    name = pipeline.name,
+                    runtime = this,
+                )
+            activeHandle = handle
+            handle
         }
     }
 
-    private suspend fun onStop(command: Command.Stop) {
-        when (lifecycle) {
-            PipelineRuntimeV2Lifecycle.CREATED,
-            PipelineRuntimeV2Lifecycle.STOPPED,
-            -> {
-                command.reply.complete(Unit)
-                return
-            }
-            PipelineRuntimeV2Lifecycle.STOPPING -> {
-                command.reply.complete(Unit)
-                return
-            }
-            PipelineRuntimeV2Lifecycle.STARTING,
-            PipelineRuntimeV2Lifecycle.RUNNING,
-            -> Unit
+    private suspend fun onStopByHandle(command: Command.StopByHandle) {
+        if (activeHandle?.id != command.handleId || lifecycle != PipelineLifecycle.RUNNING) {
+            command.reply.complete(Unit)
+            return
         }
 
-        lifecycle = PipelineRuntimeV2Lifecycle.STOPPING
-        try {
+        completeSafe(command.reply) {
             delegate?.stop()
             delegate = null
-            lifecycle = PipelineRuntimeV2Lifecycle.STOPPED
-            command.reply.complete(Unit)
-        } catch (t: Throwable) {
-            lifecycle = PipelineRuntimeV2Lifecycle.STOPPED
-            command.reply.completeExceptionally(t)
+            lifecycle = PipelineLifecycle.SHUTDOWN
         }
     }
 
-    private suspend fun onShutdown(command: Command.Shutdown) {
-        try {
-            val stopReply = CompletableDeferred<Unit>()
-            onStop(Command.Stop(stopReply))
-            stopReply.await()
+    private suspend fun onSnapshotByHandle(command: Command.SnapshotByHandle) {
+        if (activeHandle?.id != command.handleId) {
+            command.reply.completeExceptionally(
+                IllegalStateException("Pipeline handle is not active: ${command.handleId}"),
+            )
+            return
+        }
+        completeSafe(command.reply) {
+            PipelineSnapshot(
+                pipelineName = pipeline.name,
+                planVersion = planVersion,
+                lifecycle = lifecycle,
+            )
+        }
+    }
+
+    private suspend fun onShutdownRuntime(command: Command.ShutdownRuntime) {
+        completeSafe(command.reply) {
+            if (lifecycle == PipelineLifecycle.RUNNING) {
+                ensureStarted()
+                delegate?.stop()
+            }
+            delegate = null
+            activeHandle = null
+            lifecycle = PipelineLifecycle.SHUTDOWN
             mailbox.close()
-            command.reply.complete(Unit)
-        } catch (t: Throwable) {
-            command.reply.completeExceptionally(t)
+            Unit
         }
     }
 
-    private fun snapshotInternal(): PipelineRuntimeV2Snapshot =
-        PipelineRuntimeV2Snapshot(
-            pipelineName = pipeline.name,
-            planVersion = planVersion,
-            lifecycle = lifecycle,
-        )
+    private suspend fun stopFromHandle(handleId: String) {
+        ensureStarted()
+        request(mailbox) { Command.StopByHandle(handleId, it) }
+    }
+
+    private suspend fun snapshotFromHandle(handleId: String): PipelineSnapshot {
+        ensureStarted()
+        return request(mailbox) { Command.SnapshotByHandle(handleId, it) }
+    }
 
     private sealed interface Command {
-        data class Start(
+        data class StartRuntime(
             val config: RuntimeConfig,
+            val reply: CompletableDeferred<RuntimeRef>,
+        ) : Command
+
+        data class StopByHandle(
+            val handleId: String,
             val reply: CompletableDeferred<Unit>,
         ) : Command
 
-        data class Stop(
-            val reply: CompletableDeferred<Unit>,
+        data class SnapshotByHandle(
+            val handleId: String,
+            val reply: CompletableDeferred<PipelineSnapshot>,
         ) : Command
 
-        data class Snapshot(
-            val reply: CompletableDeferred<PipelineRuntimeV2Snapshot>,
-        ) : Command
-
-        data class Shutdown(
+        data class ShutdownRuntime(
             val reply: CompletableDeferred<Unit>,
         ) : Command
     }

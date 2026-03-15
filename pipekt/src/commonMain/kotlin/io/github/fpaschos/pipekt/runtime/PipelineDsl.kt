@@ -12,9 +12,9 @@ context(orchestrator: PipelineOrchestrator)
 suspend fun PipelineDefinition.start(
     planVersion: String,
     config: RuntimeConfig = RuntimeConfig(),
-): PipelineHandle =
+): RuntimeRef =
     orchestrator.startPipeline(
         definition = this,
         planVersion = planVersion,
-        runtimeConfig = config,
+        config = config,
     )

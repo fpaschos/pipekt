@@ -68,6 +68,7 @@ import kotlin.uuid.Uuid
  * @param planVersion Version key passed to [DurableStore.findOrCreateRun]; bump on incompatible plan changes.
  */
 @OptIn(ExperimentalUuidApi::class)
+@Deprecated("We will phase out to PipelineRuntimeV2 gradually")
 class PipelineRuntime(
     val pipeline: PipelineDefinition,
     val store: DurableStore,
