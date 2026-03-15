@@ -150,22 +150,6 @@ The current implementation lives under:
 Reference implementation:
 
 ```kotlin
-package io.github.fpaschos.pipekt.actor
-
-import kotlinx.atomicfu.atomic
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineName
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.ChannelResult
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeoutOrNull
-import kotlin.time.Duration
-
 /**
  * Lifecycle states for the shared actor infrastructure.
  *
@@ -507,8 +491,6 @@ abstract class Actor<Command : Any>(
 Reference implementation:
 
 ```kotlin
-package io.github.fpaschos.pipekt.actor
-
 /**
  * Small request/reply transport used by actor commands.
  *
@@ -623,10 +605,6 @@ This is closer to the actor intent found in systems such as Akka Typed, where a 
 Reference implementation:
 
 ```kotlin
-package io.github.fpaschos.pipekt.actor
-
-import kotlin.time.Duration
-
 /**
  * Generic typed handle to an actor.
  *
@@ -1140,7 +1118,7 @@ ActorRef<PipelineOrchestratorCommand>
 External callers then use:
 
 ```kotlin
-val orchestrator: ActorRef<PipelineOrchestratorCommand> = spawn { ... }
+val orchestrator: ActorRef<PipelineOrchestratorCommand> = spawn { /*...*/ }
 
 orchestrator.tell(PipelineOrchestratorCommand.StopPipeline("orders"))
 
