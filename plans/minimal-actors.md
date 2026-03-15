@@ -520,6 +520,84 @@ interface ReplyingCommand {
 }
 ```
 
+### 6.2.1 Reply ergonomics follow-up
+
+The current `ReplyingCommand` shape works, but it has two ergonomic costs:
+
+- every reply-bearing command must opt in explicitly
+- every reply-bearing command must also implement the same
+  `completeExceptionally(...)` boilerplate
+
+That implementation detail should be reduced in the next iteration.
+
+Recommended direction:
+
+- keep the marker concept
+- stop requiring each command to manually wire the failure path
+- hide `CompletableDeferred` from command protocols where practical
+
+Preferred shapes:
+
+1. Introduce a small shared reply transport abstraction, for example:
+
+```kotlin
+interface ReplyChannel<in T> {
+    fun success(value: T): Boolean
+    fun failure(cause: Throwable): Boolean
+}
+```
+
+2. Let `ask(...)` create the concrete deferred-backed implementation internally.
+
+3. Let reply-bearing commands carry a `ReplyChannel<T>` or similar responder rather than a raw
+   `CompletableDeferred<T>`.
+
+4. Replace per-command `completeExceptionally(...)` implementations with either:
+   - a shared abstract base command for request/reply commands, or
+   - a typed request interface whose failure wiring is implemented once in shared code
+
+Example target shape:
+
+```kotlin
+interface Request<Reply> : ReplyingCommand
+
+data class Ping(
+    val value: String,
+    private val replyTo: ReplyChannel<String>,
+) : Request<String> {
+    override fun completeExceptionally(cause: Throwable) {
+        replyTo.failure(cause)
+    }
+}
+```
+
+The exact API may differ, but the design goal is stable:
+
+- command protocols should describe reply intent, not coroutine deferred mechanics
+- per-command failure plumbing should be minimized or eliminated
+
+### 6.2.2 Why not expose raw `CompletableDeferred`
+
+The current `ask(...)` helper exposes `CompletableDeferred` directly in the command builder.
+
+That is acceptable for a minimal first implementation, but it is not the desired end state.
+
+Problems with exposing `CompletableDeferred` in command protocols:
+
+- it leaks coroutine transport details into domain command types
+- it makes request/reply commands more verbose than necessary
+- it encourages transport-aware command APIs rather than actor-aware ones
+- it makes it harder to evolve later toward reply refs or one-shot responders
+
+Target direction:
+
+- external callers should still use `ask(timeout) { ... }`
+- command builders should receive a small reply abstraction rather than a raw deferred
+- actor handlers should reply via `replyTo.success(...)` or equivalent
+
+This is closer to the actor intent found in systems such as Akka Typed, where a command carries
+`replyTo` rather than a future/promise object.
+
 ### 6.3 `ActorRef.kt`
 
 Reference implementation:
@@ -786,6 +864,12 @@ Rules:
 - there is no separate untyped public transport API in the core library
 - the public API uses Kotlin `Result` rather than exposing mailbox transport exceptions directly
 
+Ergonomic follow-up:
+
+- the current `ask(...)` may continue to use `CompletableDeferred` internally
+- the command builder API should move toward a small reply abstraction such as `ReplyChannel<T>`
+- this keeps the public caller ergonomics while removing deferred mechanics from command protocols
+
 ---
 
 ## 10. External access model
@@ -845,7 +929,58 @@ Rules:
 - actor constructors should remain `private` or `internal`
 - concrete actors may still offer companion helpers, but those helpers should delegate to the generic `spawn(...)`
 
-### 11.1 Why there is no actor system
+### 11.1 Scope inheritance and spawn ergonomics
+
+The current minimal `spawn(factory)` is sufficient for correctness, but it is not yet the best
+ergonomic API for real actor trees.
+
+Problems to solve:
+
+- callers currently have to assemble actor scopes manually
+- actor naming and scope naming are not aligned automatically
+- child actors need a clear default parent/child ownership model
+- overriding only the dispatcher should be easy without replacing the whole context
+
+Recommended follow-up API shape:
+
+```kotlin
+suspend fun <Command : Any> spawn(
+    parentScope: CoroutineScope,
+    actorName: String,
+    dispatcher: CoroutineDispatcher? = null,
+    supervisor: Boolean = true,
+    factory: (CoroutineScope, String) -> Actor<Command>,
+): ActorRef<Command>
+```
+
+Behavioral rules for this overload:
+
+- inherit the parent coroutine context by default
+- create a child job rather than reusing the exact parent job object
+- preserve the inherited dispatcher unless an explicit dispatcher override is provided
+- install actor naming automatically so coroutine names align with `actorLabel` where possible
+- allow concrete actors to accept the prepared scope rather than requiring every caller to build it manually
+
+This preserves the current simple `spawn(factory)` shape as a low-level primitive while providing
+an ergonomic default for production actor usage.
+
+### 11.2 Internal scope model
+
+Actors that own side jobs or child actors should distinguish between two internal scopes:
+
+- `actorScope`: owns the mailbox loop
+- `childScope`: owns actor-managed side jobs and child actors
+
+Rules:
+
+- `actorScope` termination ends the actor loop
+- `childScope` is derived from the actor's parent context and is cancelled during actor shutdown
+- actor-owned watchdogs, pollers, and child actors should use `childScope`
+- child cleanup must not cancel the actor loop out from under itself
+
+This model is especially important for orchestrator-style actors.
+
+### 11.3 Why there is no actor system
 
 This design does not require an `ActorSystem`.
 
@@ -858,18 +993,26 @@ Reasoning:
 If a future need appears for shared actor runtime services, that can be introduced later.
 It is not part of the minimal actor model.
 
-### 11.2 Why there is no actor context
+### 11.4 Why there is no actor context
 
-This design does not require an `ActorContext`.
+This design does not require a mandatory `ActorContext`.
 
 Reasoning:
 
 - actors are implemented as classes with local state and lifecycle hooks
 - `handle(command)` is sufficient for the intended use cases
-- PipeKt does not currently need behavior switching, watchers, timers, or context-bound spawn APIs
+- PipeKt does not currently need Akka-style behavior switching or a required context object on every handler call
 
-If child spawning is added later, it should build on the same generic `spawn(...)` primitive
-without forcing a context object into every actor API.
+However, minimal actor-tree support is now required.
+
+The next iteration should support:
+
+- spawn helpers that inherit scope from a parent actor
+- owned child tracking
+- termination watching
+
+Those capabilities should be added as focused actor primitives without forcing a general-purpose
+`ActorContext` parameter into every actor API.
 
 ---
 
@@ -896,6 +1039,43 @@ The orchestrator should use two scopes:
 
 This prevents actor-owned child cleanup from cancelling the actor loop out from under itself.
 
+More generally, orchestrator-owned runtimes should be treated as owned children:
+
+- the orchestrator tracks them explicitly
+- the orchestrator shuts them down from `preStop()`
+- the orchestrator may watch their termination and react by self-sending domain messages
+
+### 12.2.1 Child watch model
+
+The minimal actor package should gain a lightweight watch mechanism for owned child actors.
+
+Goal:
+
+- when an owned child stops, whether normally or due to failure, the parent can observe that fact
+- the parent decides whether to ignore it, recreate the child, or escalate
+
+Recommended semantics:
+
+- parent stop causes owned children to stop
+- child failure does not automatically crash the parent
+- child termination is surfaced to the parent as a normal self-message
+- restart policy remains domain-specific and lives in the parent actor, not in the shared actor runtime
+
+Example event shape:
+
+```kotlin
+data class ChildTerminated(
+    val childLabel: String,
+    val cause: Throwable?,
+)
+```
+
+This is sufficient for cases such as:
+
+- orchestrator restarts a failed pipeline child
+- orchestrator notices watchdog termination and recreates it
+- parent actor maintains desired child topology without a full supervision framework
+
 ### 12.3 Example protocol shape
 
 ```kotlin
@@ -904,7 +1084,7 @@ sealed interface PipelineOrchestratorCommand {
         val definition: PipelineDefinition,
         val planVersion: String,
         val config: RuntimeConfig,
-        val reply: CompletableDeferred<RuntimeRef>,
+        val replyTo: ReplyChannel<RuntimeRef>,
     ) : PipelineOrchestratorCommand, ReplyingCommand
 
     data class StopPipeline(
@@ -912,8 +1092,13 @@ sealed interface PipelineOrchestratorCommand {
     ) : PipelineOrchestratorCommand
 
     data class ListPipelines(
-        val reply: CompletableDeferred<Set<String>>,
+        val replyTo: ReplyChannel<Set<String>>,
     ) : PipelineOrchestratorCommand, ReplyingCommand
+
+    data class RuntimeTerminated(
+        val pipelineName: String,
+        val cause: Throwable?,
+    ) : PipelineOrchestratorCommand
 }
 ```
 
@@ -931,10 +1116,13 @@ val orchestrator: ActorRef<PipelineOrchestratorCommand> = spawn { ... }
 orchestrator.tell(PipelineOrchestratorCommand.StopPipeline("orders"))
 
 val pipelines =
-    orchestrator.ask(5.seconds) { reply ->
-        PipelineOrchestratorCommand.ListPipelines(reply)
+    orchestrator.ask(5.seconds) { replyTo ->
+        PipelineOrchestratorCommand.ListPipelines(replyTo)
     }.getOrThrow()
 ```
+
+In the target design, the orchestrator may also watch owned runtime children and react through
+self-sent `RuntimeTerminated(...)` commands rather than embedding restart logic outside the actor.
 
 ---
 
