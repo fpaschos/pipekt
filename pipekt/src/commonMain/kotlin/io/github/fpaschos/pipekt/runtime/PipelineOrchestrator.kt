@@ -149,64 +149,68 @@ class PipelineOrchestrator(
     }
 
     private suspend fun onStopPipelineByName(command: Command.StopPipelineByName) {
-        val handleId = handleIdByPipeline.remove(command.pipelineName)
-        if (handleId == null) {
-            command.reply.complete(Unit)
-            return
-        }
-
-        val active = activeByHandleId.remove(handleId)
-        completeSafe(command.reply) {
-            active?.handle?.stop()
-            Unit
-        }
+        TODO("Not yet implemented")
+//        val handleId = handleIdByPipeline.remove(command.pipelineName)
+//        if (handleId == null) {
+//            command.reply.complete(Unit)
+//            return
+//        }
+//
+//        val active = activeByHandleId.remove(handleId)
+//        completeSafe(command.reply) {
+//            active?.handle?.stop()
+//            Unit
+//        }
     }
 
     private suspend fun onStopPipelineByHandleId(command: Command.StopPipelineByHandleId) {
-        val active = activeByHandleId.remove(command.handleId)
-        if (active == null) {
-            command.reply.complete(Unit)
-            return
-        }
-
-        handleIdByPipeline.remove(active.handle.name)
-        completeSafe(command.reply) {
-            active.handle.stop()
-            Unit
-        }
+        TODO("Not yet implemented")
+//        val active = activeByHandleId.remove(command.handleId)
+//        if (active == null) {
+//            command.reply.complete(Unit)
+//            return
+//        }
+//
+//        handleIdByPipeline.remove(active.handle.name)
+//        completeSafe(command.reply) {
+//            active.handle.stop()
+//            Unit
+//        }
     }
 
     private suspend fun onSnapshotByHandleId(command: Command.SnapshotByHandleId) {
-        val active = activeByHandleId[command.handleId]
-        if (active == null) {
-            command.reply.completeExceptionally(
-                IllegalStateException("Pipeline handle is not active: ${command.handleId}"),
-            )
-            return
-        }
-
-        completeSafe(command.reply) {
-            active.handle.snapshot()
-        }
+        TODO("Not yet implemented")
+//        val active = activeByHandleId[command.handleId]
+//        if (active == null) {
+//            command.reply.completeExceptionally(
+//                IllegalStateException("Pipeline handle is not active: ${command.handleId}"),
+//            )
+//            return
+//        }
+//
+//        completeSafe(command.reply) {
+//            active.handle.snapshot()
+//        }
     }
 
     private suspend fun onShutdown(command: Command.Shutdown) {
-        val active = activeByHandleId.values.toList()
-        activeByHandleId.clear()
-        handleIdByPipeline.clear()
-
-        for (entry in active) {
-            entry.runtime.shutdown()
-        }
-
-        watchdog?.cancel()
-        watchdog?.join()
-        mailbox.close()
-        lifecycle = Lifecycle.SHUTDOWN
-        if (ownsScope) {
-            orchestratorScope.cancel()
-        }
-        command.reply.complete(Unit)
+        TODO("Not yet implemented")
+//        val active = activeByHandleId.values.toList()
+//        activeByHandleId.clear()
+//        handleIdByPipeline.clear()
+//
+//        for (entry in active) {
+//            entry.runtime.shutdown()
+//        }
+//
+//        watchdog?.cancel()
+//        watchdog?.join()
+//        mailbox.close()
+//        lifecycle = Lifecycle.SHUTDOWN
+//        if (ownsScope) {
+//            orchestratorScope.cancel()
+//        }
+//        command.reply.complete(Unit)
     }
 
     /** Internal command protocol consumed by orchestrator control loop. */
