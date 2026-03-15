@@ -29,7 +29,6 @@ class WorkItemTest :
                     currentStep = "step1",
                     status = WorkItemStatus.PENDING,
                     payloadJson = """{"x":1}""",
-                    lastErrorJson = null,
                     attemptCount = 0,
                     leaseOwner = null,
                     leaseExpiry = null,
@@ -44,7 +43,6 @@ class WorkItemTest :
                 currentStep shouldBe "step1"
                 status shouldBe WorkItemStatus.PENDING
                 payloadJson shouldBe """{"x":1}"""
-                lastErrorJson shouldBe null
                 attemptCount shouldBe 0
                 leaseOwner shouldBe null
                 leaseExpiry shouldBe null

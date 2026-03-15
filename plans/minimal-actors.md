@@ -124,6 +124,7 @@ Reference implementation:
 ```kotlin
 package io.github.fpaschos.pipekt.runtime
 
+import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineName
@@ -163,8 +164,7 @@ internal abstract class Actor<Command : Any>(
     private val started = CompletableDeferred<Unit>()
     private val terminated = CompletableDeferred<Unit>()
 
-    @Volatile
-    private var lifecycle: ActorLifecycle = ActorLifecycle.STARTING
+    private val lifecycle = atomic(ActorLifecycle.STARTING)
 
     private val loopJob: Job =
         scope.launch(CoroutineName(actorName)) {
@@ -172,7 +172,7 @@ internal abstract class Actor<Command : Any>(
                 postStart()
 
                 lifecycleMutex.withLock {
-                    if (lifecycle != ActorLifecycle.STARTING) {
+                    if (lifecycle.value != ActorLifecycle.STARTING) {
                         if (!started.isCompleted) {
                             started.completeExceptionally(
                                 CancellationException("$actorName was stopped during startup"),
@@ -181,7 +181,7 @@ internal abstract class Actor<Command : Any>(
                         return@launch
                     }
 
-                    lifecycle = ActorLifecycle.RUNNING
+                    lifecycle.value = ActorLifecycle.RUNNING
                     started.complete(Unit)
                 }
 
@@ -198,7 +198,7 @@ internal abstract class Actor<Command : Any>(
                 }
                 throw t
             } finally {
-                lifecycle = ActorLifecycle.SHUTDOWN
+                lifecycle.value = ActorLifecycle.SHUTDOWN
                 terminated.complete(Unit)
             }
         }
@@ -226,13 +226,13 @@ internal abstract class Actor<Command : Any>(
     }
 
     protected fun ensureAccepting() {
-        check(lifecycle == ActorLifecycle.RUNNING) {
-            "$actorName is not accepting new commands: $lifecycle"
+        check(lifecycle.value == ActorLifecycle.RUNNING) {
+            "$actorName is not accepting new commands: ${lifecycle.value}"
         }
     }
 
     protected fun trySend(command: Command): ChannelResult<Unit> {
-        return when (lifecycle) {
+        return when (lifecycle.value) {
             ActorLifecycle.RUNNING -> mailbox.trySend(command)
             ActorLifecycle.STARTING,
             ActorLifecycle.SHUTTING_DOWN,
@@ -263,18 +263,18 @@ internal abstract class Actor<Command : Any>(
     protected suspend fun shutdownGracefully(timeout: Duration? = null) {
         val shouldStop =
             lifecycleMutex.withLock {
-            when (lifecycle) {
-                ActorLifecycle.STARTING,
-                ActorLifecycle.RUNNING,
-                -> {
-                    lifecycle = ActorLifecycle.SHUTTING_DOWN
-                    true
+                when (lifecycle.value) {
+                    ActorLifecycle.STARTING,
+                    ActorLifecycle.RUNNING,
+                    -> {
+                        lifecycle.value = ActorLifecycle.SHUTTING_DOWN
+                        true
+                    }
+                    ActorLifecycle.SHUTTING_DOWN,
+                    ActorLifecycle.SHUTDOWN,
+                    -> false
                 }
-                ActorLifecycle.SHUTTING_DOWN,
-                ActorLifecycle.SHUTDOWN,
-                -> false
             }
-        }
 
         if (shouldStop) {
             mailbox.close()
@@ -300,11 +300,11 @@ internal abstract class Actor<Command : Any>(
     protected suspend fun shutdownNow() {
         val shouldStop =
             lifecycleMutex.withLock {
-                when (lifecycle) {
+                when (lifecycle.value) {
                     ActorLifecycle.STARTING,
                     ActorLifecycle.RUNNING,
                     -> {
-                        lifecycle = ActorLifecycle.SHUTTING_DOWN
+                        lifecycle.value = ActorLifecycle.SHUTTING_DOWN
                         true
                     }
                     ActorLifecycle.SHUTTING_DOWN,
@@ -335,6 +335,7 @@ internal abstract class Actor<Command : Any>(
 - New requests are rejected once shutdown begins.
 - Mailbox delivery is bounded and fail-fast by default.
 - The `Mutex` is used only for lifecycle transitions and single-flight shutdown, never for normal command handling.
+- Lifecycle visibility is modeled with multiplatform atomics rather than JVM-only `@Volatile`.
 
 ### 6.2 Hook semantics
 
@@ -377,6 +378,21 @@ It is intentionally not used for:
 - wrapping long-running suspend cleanup
 
 This keeps the hot command path mailbox-serialized and lock-free, while making startup and shutdown transitions sound.
+
+### 6.5 Why atomic lifecycle state exists
+
+The base actor uses an atomic lifecycle state because this code is Kotlin Multiplatform.
+
+Why not `@Volatile`:
+
+- `@Volatile` is JVM-oriented and not the right common-model tool for KMP actor infrastructure
+- actor lifecycle is read from multiple coroutines outside the lifecycle mutex
+
+Why atomic state is used:
+
+- it gives multiplatform-safe visibility for read-mostly lifecycle checks
+- it keeps the fast path cheap for `ensureAccepting()` and `trySend()`
+- it works together with the `Mutex`, which still owns transition sequencing
 
 ---
 
@@ -516,8 +532,8 @@ Graceful shutdown means:
 Forced shutdown means:
 
 1. transition to `SHUTTING_DOWN`
-2. run `preStop()`
-3. close mailbox
+2. close mailbox
+3. run `preStop()`
 4. cancel the loop job
 5. wait for termination
 
