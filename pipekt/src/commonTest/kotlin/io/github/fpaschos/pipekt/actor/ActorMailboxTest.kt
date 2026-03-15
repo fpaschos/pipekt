@@ -50,8 +50,7 @@ class ActorMailboxTest :
                     (1..20)
                         .map { index ->
                             async { ref.ask(1.seconds) { replyTo -> TestCommand.Ping("v$index", replyTo) } }
-                        }
-                        .map { it.await().shouldBeSuccess() }
+                        }.map { it.await().shouldBeSuccess() }
 
                 replies shouldContainExactly (1..20).map { "echo: v$it" }
                 ref.shutdown()
@@ -68,8 +67,8 @@ class ActorMailboxTest :
 
                 advanceUntilIdle()
 
-                failureAsk.await().shouldBeFailure().shouldBeInstanceOf<ActorCommandFailedException>()
-                val pendingCause = pendingAsk.await().shouldBeFailure().shouldBeInstanceOf<ActorUnavailableException>()
+                failureAsk.await().shouldBeFailure().shouldBeInstanceOf<ActorCommandFailed>()
+                val pendingCause = pendingAsk.await().shouldBeFailure().shouldBeInstanceOf<ActorUnavailable>()
                 pendingCause.reason shouldBe ActorUnavailableReason.NOT_DELIVERED
             }
         }
@@ -89,7 +88,7 @@ class ActorMailboxTest :
                 advanceTimeBy(50.milliseconds)
                 runCurrent()
 
-                val pendingCause = pendingAsk.await().shouldBeFailure().shouldBeInstanceOf<ActorUnavailableException>()
+                val pendingCause = pendingAsk.await().shouldBeFailure().shouldBeInstanceOf<ActorUnavailable>()
                 pendingCause.reason shouldBe ActorUnavailableReason.NOT_DELIVERED
 
                 gate.complete(Unit)
@@ -108,7 +107,7 @@ class ActorMailboxTest :
                 advanceUntilIdle()
 
                 undelivered.shouldContainExactly("Record:NOT_DELIVERED")
-                ref.tell(TestCommand.Record("late")).shouldBeFailure().shouldBeInstanceOf<ActorUnavailableException>()
+                ref.tell(TestCommand.Record("late")).shouldBeFailure().shouldBeInstanceOf<ActorUnavailable>()
             }
         }
     })

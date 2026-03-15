@@ -6,6 +6,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
@@ -44,16 +45,16 @@ private val nextActorInstanceId = atomic(0L)
  *
  * @param Command Sealed command type for this actor.
  * @param scope Scope that owns the mailbox loop; cancellation of this scope terminates the actor.
- * @param actorName Name used for the loop coroutine and error messages.
+ * @param name Name used for the loop coroutine and error messages.
  * @param capacity Mailbox channel capacity; default is [Channel.BUFFERED].
  */
 abstract class Actor<Command : Any>(
     private val scope: CoroutineScope,
-    private val actorName: String,
+    private val name: String,
     capacity: Int = Channel.BUFFERED,
 ) {
     private val actorInstanceId = nextActorInstanceId.incrementAndGet()
-    private val actorLabel = "$actorName#$actorInstanceId"
+    private val label = "${this@Actor.name}#$actorInstanceId"
 
     /** Bounded mailbox for commands. */
     protected val mailbox = Channel<Command>(capacity)
@@ -64,12 +65,12 @@ abstract class Actor<Command : Any>(
 
     private val lifecycle = atomic(ActorLifecycle.STARTING)
     private val terminalCause = atomic<Throwable?>(null)
-    private val ownedChildren = mutableListOf<OwnedChild<Command>>()
+    private val children = mutableListOf<ActorChild<Command>>()
     private val childScope =
         CoroutineScope(
             scope.coroutineContext +
                 SupervisorJob(scope.coroutineContext[Job]) +
-                CoroutineName("$actorLabel/children"),
+                CoroutineName("${this@Actor.label}/children"),
         )
 
     /** Typed ref used by outsiders and peer actors to interact with this actor. */
@@ -77,11 +78,11 @@ abstract class Actor<Command : Any>(
 
     private val actorRef =
         object : ActorRef<Command> {
-            override val actorName: String
-                get() = this@Actor.actorName
+            override val name: String
+                get() = this@Actor.name
 
-            override val actorLabel: String
-                get() = this@Actor.actorLabel
+            override val label: String
+                get() = this@Actor.label
 
             override fun tell(command: Command): Result<Unit> = send(command)
 
@@ -91,9 +92,9 @@ abstract class Actor<Command : Any>(
         }
 
     private val loopJob: Job =
-        scope.launch(CoroutineName(actorLabel)) {
+        scope.launch(CoroutineName(this@Actor.label)) {
             try {
-                // Run actor-owned startup before the actor becomes externally usable.
+                // Run actor owned startup before the actor becomes externally usable.
                 // If this throws, spawn()/awaitStarted() fail and no ref is returned.
                 postStart()
 
@@ -113,7 +114,7 @@ abstract class Actor<Command : Any>(
                     // Exit without entering the mailbox drain loop; fail startup so spawn() does not hang.
                     if (!started.isCompleted) {
                         started.completeExceptionally(
-                            CancellationException("$actorLabel was stopped during startup"),
+                            CancellationException("${this@Actor.label} was stopped during startup"),
                         )
                     }
                     return@launch
@@ -130,7 +131,7 @@ abstract class Actor<Command : Any>(
                         terminalCause.value = t
                         onCommandFailure(command, t)
                         mailbox.close(t)
-                        failPendingCommands(ActorUnavailableReason.NOT_DELIVERED)
+                        failPendingCommands()
                         throw t
                     }
                 }
@@ -141,7 +142,7 @@ abstract class Actor<Command : Any>(
                     started.completeExceptionally(t)
                 }
             } finally {
-                // Publish terminal lifecycle before releasing shutdown waiters.
+                // Publish the terminal lifecycle before releasing shutdown waiters.
                 lifecycle.value = ActorLifecycle.SHUTDOWN
                 try {
                     postStop()
@@ -192,14 +193,14 @@ abstract class Actor<Command : Any>(
      * Called when [handle] throws.
      *
      * Default behavior completes the failing reply-bearing command exceptionally with
-     * [ActorCommandFailedException]. The actor stops after this hook returns.
+     * [ActorCommandFailed]. The actor stops after this hook returns.
      */
     protected open suspend fun onCommandFailure(
         command: Command,
         cause: Throwable,
     ) {
         if (command is ReplyRequest<*>) {
-            command.failRequest(ActorCommandFailedException(actorLabel, cause))
+            command.failRequest(ActorCommandFailed(this@Actor.label, cause))
         }
     }
 
@@ -207,7 +208,7 @@ abstract class Actor<Command : Any>(
      * Called for commands accepted earlier but never delivered to [handle].
      *
      * Default behavior completes reply-bearing commands exceptionally with
-     * [ActorUnavailableException] and ignores one-way commands.
+     * [ActorUnavailable] and ignores one-way commands.
      */
     protected open fun onUndeliveredCommand(
         command: Command,
@@ -215,9 +216,9 @@ abstract class Actor<Command : Any>(
     ) {
         if (command is ReplyRequest<*>) {
             command.failRequest(
-                ActorUnavailableException(
+                ActorUnavailable(
                     reason = reason,
-                    actorLabel = actorLabel,
+                    actorLabel = this@Actor.label,
                 ),
             )
         }
@@ -227,15 +228,15 @@ abstract class Actor<Command : Any>(
      * Non-blocking send.
      *
      * Returns [Result.success] when [command] is accepted into the mailbox.
-     * Returns [Result.failure] with [ActorUnavailableException] when the actor is not
+     * Returns [Result.failure] with [ActorUnavailable] when the actor is not
      * accepting commands or when the mailbox cannot accept the command.
      */
     protected fun send(command: Command): Result<Unit> {
         if (lifecycle.value != ActorLifecycle.RUNNING) {
             return Result.failure(
-                ActorUnavailableException(
+                ActorUnavailable(
                     reason = ActorUnavailableReason.ACTOR_CLOSED,
-                    actorLabel = actorLabel,
+                    actorLabel = this@Actor.label,
                 ),
             )
         }
@@ -245,9 +246,9 @@ abstract class Actor<Command : Any>(
             Result.success(Unit)
         } else {
             Result.failure(
-                ActorUnavailableException(
+                ActorUnavailable(
                     reason = ActorUnavailableReason.MAILBOX_FULL,
-                    actorLabel = actorLabel,
+                    actorLabel = this@Actor.label,
                     cause = result.exceptionOrNull(),
                 ),
             )
@@ -309,7 +310,7 @@ abstract class Actor<Command : Any>(
         mailbox.close()
 
         suspend fun forceShutdown() {
-            failPendingCommands(ActorUnavailableReason.NOT_DELIVERED)
+            failPendingCommands()
             childScope.coroutineContext.job.cancel()
             // Hard stop: cancel the actor loop and wait until final termination is observed.
             loopJob.cancel()
@@ -349,41 +350,41 @@ abstract class Actor<Command : Any>(
         }
     }
 
-    private fun failPendingCommands(reason: ActorUnavailableReason) {
+    private fun failPendingCommands() {
         while (true) {
             val buffered = mailbox.tryReceive().getOrNull() ?: return
-            onUndeliveredCommand(buffered, reason)
+            onUndeliveredCommand(buffered, ActorUnavailableReason.NOT_DELIVERED)
         }
     }
 
     /**
-     * Spawns an owned child actor under this actor's [childScope]. Owned children are stopped
+     * Spawns an child actor under this actor's [childScope]. Owned children are stopped
      * during parent shutdown. If [onTerminated] is provided, child termination is converted into a
      * parent self-message.
      */
-    protected suspend fun <ChildCommand : Any> spawnOwnedChild(
-        actorName: String,
+    protected suspend fun <ChildCommand : Any> spawnChild(
+        name: String,
         dispatcher: CoroutineDispatcher? = null,
         supervisor: Boolean = true,
         onTerminated: ((ChildTermination) -> Command)? = null,
         factory: (CoroutineScope, String) -> Actor<ChildCommand>,
     ): ActorRef<ChildCommand> {
-        val preparedScope = createActorScope(childScope, actorName, dispatcher, supervisor)
-        val child = factory(preparedScope, actorName)
+        val preparedScope = createActorScope(childScope, name, dispatcher, supervisor)
+        val child = factory(preparedScope, name)
         child.awaitStarted()
         registerOwnedChild(child, onTerminated)
         return child.self()
     }
 
     /**
-     * Observes a child previously created through [spawnOwnedChild]. Watch notifications are best
+     * Observes a child previously created through [spawnChild]. Watch notifications are best
      * effort during shutdown: if the parent no longer accepts commands, the event is dropped.
      */
     protected fun watch(
         child: ActorRef<*>,
         onTerminated: (ChildTermination) -> Command,
     ) {
-        val owned = ownedChildren.firstOrNull { it.actor.self().actorLabel == child.actorLabel } ?: return
+        val owned = children.firstOrNull { it.actor.self().label == child.label } ?: return
         owned.watchers += onTerminated
     }
 
@@ -392,19 +393,19 @@ abstract class Actor<Command : Any>(
         watcher: ((ChildTermination) -> Command)?,
     ) {
         val owned =
-            OwnedChild<Command>(
+            ActorChild(
                 actor = child,
                 watchers = mutableListOf<(ChildTermination) -> Command>(),
             )
         if (watcher != null) {
             owned.watchers += watcher
         }
-        ownedChildren += owned
+        children += owned
         child.loopJob.invokeOnCompletion { cause ->
             val termination =
                 ChildTermination(
-                    childName = child.self().actorName,
-                    childLabel = child.self().actorLabel,
+                    childName = child.self().name,
+                    childLabel = child.self().label,
                     cause = child.terminalCause.value ?: cause,
                 )
             owned.watchers.forEach { watcherFn ->
@@ -414,7 +415,7 @@ abstract class Actor<Command : Any>(
     }
 
     private suspend fun shutdownOwnedChildren() {
-        val children = ownedChildren.toList()
+        val children = children.toList()
         children.forEach { owned ->
             owned.actor.self().shutdown()
         }
@@ -428,7 +429,7 @@ data class ChildTermination(
     val cause: Throwable?,
 )
 
-private data class OwnedChild<ParentCommand : Any>(
+private data class ActorChild<ParentCommand : Any>(
     val actor: Actor<*>,
     val watchers: MutableList<(ChildTermination) -> ParentCommand>,
 )
@@ -468,13 +469,13 @@ suspend fun <Command : Any> spawn(factory: () -> Actor<Command>): ActorRef<Comma
  */
 suspend fun <Command : Any> spawn(
     parentScope: CoroutineScope,
-    actorName: String,
+    name: String,
     dispatcher: CoroutineDispatcher? = null,
     supervisor: Boolean = true,
     factory: (CoroutineScope, String) -> Actor<Command>,
 ): ActorRef<Command> {
-    val scope = createActorScope(parentScope, actorName, dispatcher, supervisor)
-    val actor = factory(scope, actorName)
+    val scope = createActorScope(parentScope, name, dispatcher, supervisor)
+    val actor = factory(scope, name)
     actor.awaitStarted()
     return actor.self()
 }

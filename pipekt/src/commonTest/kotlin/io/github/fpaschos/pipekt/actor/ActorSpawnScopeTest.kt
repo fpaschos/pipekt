@@ -31,9 +31,9 @@ class ActorSpawnScopeTest :
                         MinimalActor(actorScope, actorName)
                     }
 
-                first.actorName shouldBe "shared-name"
-                second.actorName shouldBe "shared-name"
-                first.actorLabel shouldNotBe second.actorLabel
+                first.name shouldBe "shared-name"
+                second.name shouldBe "shared-name"
+                first.label shouldNotBe second.label
 
                 first.shutdown()
                 second.shutdown()
@@ -49,7 +49,7 @@ class ActorSpawnScopeTest :
                         MinimalActor(actorScope, actorName)
                     }
 
-                ref.ask(1.seconds) { replyTo -> TestCommand.LoopName(replyTo) }.shouldBeSuccess(ref.actorLabel)
+                ref.ask(1.seconds) { replyTo -> TestCommand.LoopName(replyTo) }.shouldBeSuccess(ref.label)
 
                 ref.shutdown()
                 parentScope.cancel()
@@ -68,7 +68,7 @@ class ActorSpawnScopeTest :
                 advanceUntilIdle()
 
                 val failure =
-                    ref.tell(TestCommand.Record("late")).exceptionOrNull().shouldBeInstanceOf<ActorUnavailableException>()
+                    ref.tell(TestCommand.Record("late")).exceptionOrNull().shouldBeInstanceOf<ActorUnavailable>()
                 failure.reason shouldBe ActorUnavailableReason.ACTOR_CLOSED
             }
         }
@@ -80,7 +80,7 @@ class ActorSpawnScopeTest :
                 val ref =
                     spawn(
                         parentScope = parentScope,
-                        actorName = "override-actor",
+                        name = "override-actor",
                         dispatcher = overrideDispatcher,
                     ) { actorScope, actorName ->
                         MinimalActor(actorScope, actorName)
@@ -90,7 +90,7 @@ class ActorSpawnScopeTest :
                 advanceUntilIdle()
 
                 val failure =
-                    ref.tell(TestCommand.Record("late")).exceptionOrNull().shouldBeInstanceOf<ActorUnavailableException>()
+                    ref.tell(TestCommand.Record("late")).exceptionOrNull().shouldBeInstanceOf<ActorUnavailable>()
                 failure.reason shouldBe ActorUnavailableReason.ACTOR_CLOSED
             }
         }

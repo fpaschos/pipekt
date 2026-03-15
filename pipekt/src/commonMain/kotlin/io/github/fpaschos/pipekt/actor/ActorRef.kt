@@ -30,7 +30,7 @@ enum class ActorUnavailableReason {
     NOT_DELIVERED,
 }
 
-class ActorUnavailableException(
+class ActorUnavailable(
     val reason: ActorUnavailableReason,
     actorLabel: String,
     cause: Throwable? = null,
@@ -39,7 +39,7 @@ class ActorUnavailableException(
 /**
  * Request/reply did not complete before the timeout elapsed.
  */
-class ActorAskTimeoutException(
+class ActorAskTimeout(
     actorLabel: String,
     timeout: Duration,
 ) : ActorException("$actorLabel did not reply within $timeout")
@@ -47,7 +47,7 @@ class ActorAskTimeoutException(
 /**
  * Actor command handling failed after the command was accepted.
  */
-class ActorCommandFailedException(
+class ActorCommandFailed(
     actorLabel: String,
     cause: Throwable,
 ) : ActorException("$actorLabel command failed", cause)
@@ -62,18 +62,18 @@ interface ActorRef<in Command : Any> {
     /**
      * Semantic caller-provided name. This is not guaranteed to be globally unique.
      */
-    val actorName: String
+    val name: String
 
     /**
-     * Process-local unique diagnostic label derived from [actorName], e.g. `worker#7`.
+     * Process-local unique diagnostic label derived from [name], e.g. `worker#7`.
      */
-    val actorLabel: String
+    val label: String
 
     /**
      * Sends [command] to the target actor without waiting for a reply.
      *
      * Returns [Result.success] when the command was accepted. Returns [Result.failure]
-     * with [ActorUnavailableException] when the actor cannot accept the command.
+     * with [ActorUnavailable] when the actor cannot accept the command.
      */
     fun tell(command: Command): Result<Unit>
 
@@ -95,10 +95,10 @@ interface ActorRef<in Command : Any> {
  */
 suspend fun <Command : Any, Reply> ActorRef<Command>.ask(
     timeout: Duration,
-    build: (ReplyChannel<Reply>) -> Command,
+    block: (ReplyChannel<Reply>) -> Command,
 ): Result<Reply> {
     val reply = deferredReplyChannel<Reply>()
-    val enqueue = tell(build(reply))
+    val enqueue = tell(block(reply))
     if (enqueue.isFailure) {
         return Result.failure(enqueue.exceptionOrNull()!!)
     }
@@ -106,7 +106,7 @@ suspend fun <Command : Any, Reply> ActorRef<Command>.ask(
     return try {
         Result.success(withTimeout(timeout) { reply.await() })
     } catch (_: TimeoutCancellationException) {
-        val timeoutException = ActorAskTimeoutException(actorLabel, timeout)
+        val timeoutException = ActorAskTimeout(label, timeout)
         reply.cancel()
         Result.failure(timeoutException)
     } catch (t: Throwable) {

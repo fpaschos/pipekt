@@ -4,8 +4,6 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlin.coroutines.coroutineContext
 
 sealed interface TestCommand {
@@ -54,7 +52,6 @@ class MinimalActor(
     capacity: Int = Channel.BUFFERED,
 ) : Actor<TestCommand>(scope, name, capacity) {
     private val recorded = mutableListOf<String>()
-    private val stateMutex = Mutex()
 
     override suspend fun postStart() {
         events.add("postStart:begin")
@@ -65,9 +62,7 @@ class MinimalActor(
     override suspend fun handle(command: TestCommand) {
         when (command) {
             is TestCommand.Record -> {
-                stateMutex.withLock {
-                    recorded += command.value
-                }
+                recorded += command.value
                 events.add("handle:record:${command.value}")
             }
 
@@ -78,7 +73,7 @@ class MinimalActor(
 
             is TestCommand.Snapshot -> {
                 events.add("handle:snapshot")
-                command.success(stateMutex.withLock { recorded.toList() })
+                command.success(recorded.toList())
             }
 
             is TestCommand.Fail -> {
@@ -99,7 +94,9 @@ class MinimalActor(
                 events.add("handle:block:end")
             }
 
-            is TestCommand.LoopName -> command.success(coroutineContext[CoroutineName]?.name)
+            is TestCommand.LoopName -> {
+                command.success(coroutineContext[CoroutineName]?.name)
+            }
         }
     }
 
@@ -215,8 +212,8 @@ class ParentActor(
 
     override suspend fun postStart() {
         child =
-            spawnOwnedChild(
-                actorName = "owned-child",
+            spawnChild(
+                name = "owned-child",
                 onTerminated = { ParentCommand.ChildObserved(it) },
             ) { childScope, childName ->
                 ChildActor(childScope, childName, events)
@@ -225,7 +222,10 @@ class ParentActor(
 
     override suspend fun handle(command: ParentCommand) {
         when (command) {
-            is ParentCommand.SnapshotEvents -> command.success(events.toList())
+            is ParentCommand.SnapshotEvents -> {
+                command.success(events.toList())
+            }
+
             is ParentCommand.StopChild -> {
                 child.shutdown()
                 command.success(Unit)
@@ -241,7 +241,9 @@ class ParentActor(
                 events += "parent:child-terminated:${command.termination.childLabel}:$causeName"
             }
 
-            is ParentCommand.ChildCaptured -> events += "parent:captured:${command.value}"
+            is ParentCommand.ChildCaptured -> {
+                events += "parent:captured:${command.value}"
+            }
         }
     }
 }

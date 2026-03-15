@@ -73,9 +73,9 @@ class ActorConcurrencyRegressionTest :
 
                 advanceUntilIdle()
 
-                failure.await().shouldBeFailure().shouldBeInstanceOf<ActorCommandFailedException>()
+                failure.await().shouldBeFailure().shouldBeInstanceOf<ActorCommandFailed>()
                 pending.forEach { deferred ->
-                    val cause = deferred.await().shouldBeFailure().shouldBeInstanceOf<ActorUnavailableException>()
+                    val cause = deferred.await().shouldBeFailure().shouldBeInstanceOf<ActorUnavailable>()
                     cause.reason shouldBe ActorUnavailableReason.NOT_DELIVERED
                 }
             }

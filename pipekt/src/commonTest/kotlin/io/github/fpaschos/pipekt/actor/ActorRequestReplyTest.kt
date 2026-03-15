@@ -43,7 +43,7 @@ class ActorRequestReplyTest :
                 val ref = spawn { MinimalActor(scope, "failure-actor") }
 
                 val failure = ref.ask(1.seconds) { replyTo -> TestCommand.Fail(replyTo) }.shouldBeFailure()
-                failure.shouldBeInstanceOf<ActorCommandFailedException>()
+                failure.shouldBeInstanceOf<ActorCommandFailed>()
             }
         }
 
@@ -59,7 +59,7 @@ class ActorRequestReplyTest :
                             TestCommand.SlowPing("slow", gate, replyTo)
                         }.shouldBeFailure()
 
-                failure.shouldBeInstanceOf<ActorAskTimeoutException>()
+                failure.shouldBeInstanceOf<ActorAskTimeout>()
 
                 gate.complete(Unit)
                 advanceUntilIdle()

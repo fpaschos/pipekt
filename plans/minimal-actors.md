@@ -89,15 +89,15 @@ Actor naming is intentionally lightweight.
 
 The model distinguishes:
 
-- `actorName`: caller-provided semantic name such as `pipeline-orchestrator`
-- `actorLabel`: process-local unique diagnostic label such as `pipeline-orchestrator#7`
+- `name`: caller-provided semantic name such as `pipeline-orchestrator`
+- `label`: process-local unique diagnostic label such as `pipeline-orchestrator#7`
 
 Rules:
 
-- `actorName` is not globally unique
+- `name` is not globally unique
 - multiple actor instances may share the same semantic name
-- `actorLabel` is generated internally from a process-local counter
-- `actorLabel` is used for coroutine names, error messages, and diagnostics
+- `label` is generated internally from a process-local counter
+- `label` is used for coroutine names, error messages, and diagnostics
 
 This avoids a global actor registry while still keeping diagnostics unambiguous.
 
@@ -143,7 +143,7 @@ The current implementation lives under:
 
 - `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/actor/Actor.kt`
 - `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/actor/ActorRef.kt`
-- `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/actor/ReplyingCommand.kt`
+- `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/actor/RequestReply.kt`
 
 ### 6.1 `Actor.kt`
 
@@ -207,7 +207,7 @@ enum class ActorUnavailableReason {
     NOT_DELIVERED,
 }
 
-class ActorUnavailableException(
+class ActorUnavailable(
     val reason: ActorUnavailableReason,
     actorLabel: String,
     cause: Throwable? = null,
@@ -216,7 +216,7 @@ class ActorUnavailableException(
 /**
  * Request/reply did not complete before the ask timeout elapsed.
  */
-class ActorAskTimeoutException(
+class ActorAskTimeout(
     actorLabel: String,
     timeout: Duration,
 ) : ActorException("$actorLabel did not reply within $timeout")
@@ -224,7 +224,7 @@ class ActorAskTimeoutException(
 /**
  * Actor command handling failed after the command was accepted.
  */
-class ActorCommandFailedException(
+class ActorCommandFailed(
     actorLabel: String,
     cause: Throwable,
 ) : ActorException("$actorLabel command failed", cause)
@@ -240,16 +240,16 @@ class ActorCommandFailedException(
  *
  * @param Command Sealed command type for this actor.
  * @param scope Scope that owns the mailbox loop; cancellation of this scope terminates the actor.
- * @param actorName Name used for the loop coroutine and error messages.
+ * @param name Name used for the loop coroutine and error messages.
  * @param capacity Mailbox channel capacity; default is [Channel.BUFFERED].
  */
 abstract class Actor<Command : Any>(
     private val scope: CoroutineScope,
-    private val actorName: String,
+    private val name: String,
     capacity: Int = Channel.BUFFERED,
 ) {
     private val actorInstanceId = nextActorInstanceId.incrementAndGet()
-    private val actorLabel = "$actorName#$actorInstanceId"
+    private val label = "$name#$actorInstanceId"
 
     /** Bounded mailbox for commands. */
     protected val mailbox = Channel<Command>(capacity)
@@ -261,7 +261,7 @@ abstract class Actor<Command : Any>(
     private val lifecycle = atomic(ActorLifecycle.STARTING)
 
     private val loopJob: Job =
-        scope.launch(CoroutineName(actorName)) {
+        scope.launch(CoroutineName(label)) {
             try {
                 // Run actor-owned startup before the actor becomes externally usable.
                 // If this throws, spawn()/awaitStarted() fail and no ref is returned.
@@ -283,7 +283,7 @@ abstract class Actor<Command : Any>(
                     // Exit without entering the mailbox drain loop; fail startup so spawn() does not hang.
                     if (!started.isCompleted) {
                         started.completeExceptionally(
-                            CancellationException("$actorName was stopped during startup"),
+                            CancellationException("$label was stopped during startup"),
                         )
                     }
                     return@launch
@@ -361,15 +361,15 @@ abstract class Actor<Command : Any>(
      * Called when [handle] throws.
      *
      * Default behavior:
-     * - complete the failing reply-bearing command exceptionally with [ActorCommandFailedException]
+     * - complete the failing reply-bearing command exceptionally with [ActorCommandFailed]
      * - stop the actor by rethrowing from the loop
      */
     protected open suspend fun onCommandFailure(
         command: Command,
         cause: Throwable,
     ) {
-        if (command is ReplyingCommand) {
-            command.completeExceptionally(ActorCommandFailedException(actorName, cause))
+        if (command is ReplyRequest<*>) {
+            command.failRequest(ActorCommandFailed(label, cause))
         }
     }
 
@@ -377,8 +377,8 @@ abstract class Actor<Command : Any>(
      * Called for commands accepted earlier but never delivered to [handle].
      *
      * Default behavior is:
-     * - if the command implements [ReplyingCommand], complete it exceptionally with
-     *   [ActorUnavailableException]
+     * - if the command carries shared reply transport, fail it with
+     *   [ActorUnavailable]
      * - otherwise do nothing
      *
      * Concrete actors may override this for logging or metrics.
@@ -387,11 +387,11 @@ abstract class Actor<Command : Any>(
         command: Command,
         reason: ActorUnavailableReason,
     ) {
-        if (command is ReplyingCommand) {
-            command.completeExceptionally(
-                ActorUnavailableException(
+        if (command is ReplyRequest<*>) {
+            command.failRequest(
+                ActorUnavailable(
                     reason = reason,
-                    actorName = actorName,
+                    actorLabel = label,
                 ),
             )
         }
@@ -400,7 +400,7 @@ abstract class Actor<Command : Any>(
     /** Throws if [lifecycle] is not [ActorLifecycle.RUNNING]. */
     protected fun ensureAccepting() {
         check(lifecycle.value == ActorLifecycle.RUNNING) {
-            "$actorName is not accepting new commands: ${lifecycle.value}"
+            "$name is not accepting new commands: ${lifecycle.value}"
         }
     }
 
@@ -408,7 +408,7 @@ abstract class Actor<Command : Any>(
      * Non-blocking send.
      *
      * Returns [Result.success] when [command] is accepted into the mailbox.
-     * Returns [Result.failure] with [ActorUnavailableException] when the actor is not
+     * Returns [Result.failure] with [ActorUnavailable] when the actor is not
      * accepting commands or when the mailbox cannot accept the command.
      */
     protected fun send(command: Command): Result<Unit>
@@ -502,7 +502,7 @@ abstract class Actor<Command : Any>(
 }
 ```
 
-### 6.2 `ReplyingCommand.kt`
+### 6.2 `RequestReply.kt`
 
 Reference implementation:
 
@@ -510,30 +510,45 @@ Reference implementation:
 package io.github.fpaschos.pipekt.actor
 
 /**
- * Optional marker for commands that carry a reply handle.
+ * Small request/reply transport used by actor commands.
  *
- * When [Actor.handle] throws and the command implements this interface, the base actor can
- * complete the pending reply exceptionally instead of leaving the requester suspended forever.
+ * Command protocols see only this abstraction; the deferred used by [ask] stays internal to the
+ * actor package.
  */
-interface ReplyingCommand {
-    fun completeExceptionally(cause: Throwable)
+interface ReplyChannel<in Reply> {
+    fun success(value: Reply): Boolean
+
+    fun failure(cause: Throwable): Boolean
+}
+
+/**
+ * Marker for commands that carry a shared reply transport.
+ */
+interface ReplyRequest<Reply> {
+    val replyTo: ReplyChannel<Reply>
+}
+
+/**
+ * Shared base class for request commands so each message does not need to reimplement failure
+ * plumbing.
+ */
+abstract class Request<Reply>(
+    final override val replyTo: ReplyChannel<Reply>,
+) : ReplyRequest<Reply> {
+    fun success(value: Reply): Boolean = replyTo.success(value)
+
+    fun failure(cause: Throwable): Boolean = replyTo.failure(cause)
 }
 ```
 
 ### 6.2.1 Reply ergonomics follow-up
 
-The current `ReplyingCommand` shape works, but it has two ergonomic costs:
-
-- every reply-bearing command must opt in explicitly
-- every reply-bearing command must also implement the same
-  `completeExceptionally(...)` boilerplate
-
-That implementation detail should be reduced in the next iteration.
+The current shared request shape removes the old per-command failure boilerplate.
 
 Recommended direction:
 
-- keep the marker concept
-- stop requiring each command to manually wire the failure path
+- keep the shared request marker concept
+- keep failure wiring in the shared request base class
 - hide `CompletableDeferred` from command protocols where practical
 
 Preferred shapes:
@@ -552,22 +567,21 @@ interface ReplyChannel<in T> {
 3. Let reply-bearing commands carry a `ReplyChannel<T>` or similar responder rather than a raw
    `CompletableDeferred<T>`.
 
-4. Replace per-command `completeExceptionally(...)` implementations with shared request-carrying
-   infrastructure implemented once in the actor package.
+4. Use shared request-carrying infrastructure implemented once in the actor package.
 
 Example target shape:
 
 ```kotlin
-interface ReplyRequest<Reply> : ReplyingCommand {
+interface ReplyRequest<Reply> {
     val replyTo: ReplyChannel<Reply>
 }
 
 abstract class Request<Reply>(
     final override val replyTo: ReplyChannel<Reply>,
 ) : ReplyRequest<Reply> {
-    final override fun completeExceptionally(cause: Throwable) {
-        replyTo.failure(cause)
-    }
+    fun success(value: Reply): Boolean = replyTo.success(value)
+
+    fun failure(cause: Throwable): Boolean = replyTo.failure(cause)
 }
 
 data class Ping(
@@ -620,14 +634,14 @@ import kotlin.time.Duration
  * [tell] or [ask]. Concrete per-actor ref subclasses are not required by the core model.
  */
 interface ActorRef<in Command : Any> {
-    val actorName: String
-    val actorLabel: String
+    val name: String
+    val label: String
 
     /**
      * Sends a command without waiting for a reply.
      *
      * Result is [Result.success] when the command was accepted into the mailbox.
-     * Result is [Result.failure] with [ActorUnavailableException] when the actor cannot
+     * Result is [Result.failure] with [ActorUnavailable] when the actor cannot
      * accept the command.
      */
     fun tell(command: Command): Result<Unit>
@@ -650,10 +664,10 @@ interface ActorRef<in Command : Any> {
  */
 suspend fun <Command : Any, Reply> ActorRef<Command>.ask(
     timeout: Duration,
-    build: (ReplyChannel<Reply>) -> Command,
+    block: (ReplyChannel<Reply>) -> Command,
 ): Result<Reply> {
     val reply = deferredReplyChannel<Reply>()
-    val enqueue = tell(build(reply))
+    val enqueue = tell(block(reply))
     if (enqueue.isFailure) {
         return Result.failure(enqueue.exceptionOrNull()!!)
     }
@@ -736,9 +750,9 @@ Implementation:
 
 - each mailbox dispatch is wrapped in `try/catch`
 - if [handle] throws, the base actor completes the failing reply-bearing command exceptionally
-  with `ActorCommandFailedException`
+  with `ActorCommandFailed`
 - after that, the actor stops instead of continuing with later commands
-- command failures surfaced through `ask(...)` should be wrapped as `ActorCommandFailedException`
+- command failures surfaced through `ask(...)` should be wrapped as `ActorCommandFailed`
 
 This is intentional.
 
@@ -776,7 +790,7 @@ mailbox need an explicit policy.
 
 This design uses the following rules:
 
-- pending reply-bearing commands are failed exceptionally with `ActorUnavailableException`
+- pending reply-bearing commands are failed exceptionally with `ActorUnavailable`
 - the reason should be `ActorUnavailableReason.NOT_DELIVERED`
 - pending one-way commands are dropped
 - there is no dead-letter subsystem in the minimal actor library
@@ -802,7 +816,7 @@ protected open fun onUndeliveredCommand(
 Default behavior:
 
 - if `command` carries a shared request reply channel, fail it with
-  `ActorUnavailableException(reason = NOT_DELIVERED, ...)`
+  `ActorUnavailable(reason = NOT_DELIVERED, ...)`
 - otherwise do nothing
 
 Concrete actors may override this hook to:
@@ -822,8 +836,8 @@ The mailbox is finite and fail-fast by default.
 Default behavior:
 
 - non-blocking channel send is used internally
-- if the mailbox is full, `tell(...)` / `ask(...)` return `Result.failure(ActorUnavailableException)`
-- if the actor is not accepting commands, `tell(...)` / `ask(...)` return `Result.failure(ActorUnavailableException)`
+- if the mailbox is full, `tell(...)` / `ask(...)` return `Result.failure(ActorUnavailable)`
+- if the actor is not accepting commands, `tell(...)` / `ask(...)` return `Result.failure(ActorUnavailable)`
 - `tell(...)` does not suspend for mailbox space
 - mailbox capacity is a protection boundary, not a backpressure API
 
@@ -831,9 +845,9 @@ Default behavior:
 
 Public transport failures are intentionally compressed:
 
-- `ActorUnavailableException`
-- `ActorAskTimeoutException`
-- `ActorCommandFailedException`
+- `ActorUnavailable`
+- `ActorAskTimeout`
+- `ActorCommandFailed`
 
 This is a deliberate ergonomics tradeoff.
 
@@ -845,9 +859,9 @@ Callers usually care about only:
 
 When callers need more detail about unavailability, they inspect:
 
-- `ActorUnavailableException.reason == ACTOR_CLOSED`
-- `ActorUnavailableException.reason == MAILBOX_FULL`
-- `ActorUnavailableException.reason == NOT_DELIVERED`
+- `ActorUnavailable.reason == ACTOR_CLOSED`
+- `ActorUnavailable.reason == MAILBOX_FULL`
+- `ActorUnavailable.reason == NOT_DELIVERED`
 
 The core library should avoid exposing more transport-specific exception types unless a
 real use case justifies them.
@@ -886,8 +900,8 @@ Canonical shape:
 
 ```kotlin
 interface ActorRef<in Command : Any> {
-    val actorName: String
-    val actorLabel: String
+    val name: String
+    val label: String
     fun tell(command: Command): Result<Unit>
     suspend fun shutdown(timeout: Duration? = null)
 }
@@ -907,8 +921,8 @@ The same rule applies to actor-to-actor communication:
 
 Diagnostic identity rules:
 
-- `actorName` is semantic and may collide across instances
-- `actorLabel` is process-local unique and should be used in logs and errors
+- `name` is semantic and may collide across instances
+- `label` is process-local unique and should be used in logs and errors
 
 ---
 
@@ -952,7 +966,7 @@ Recommended follow-up API shape:
 ```kotlin
 suspend fun <Command : Any> spawn(
     parentScope: CoroutineScope,
-    actorName: String,
+    name: String,
     dispatcher: CoroutineDispatcher? = null,
     supervisor: Boolean = true,
     factory: (CoroutineScope, String) -> Actor<Command>,
@@ -964,7 +978,7 @@ Behavioral rules for this overload:
 - inherit the parent coroutine context by default
 - create a child job rather than reusing the exact parent job object
 - preserve the inherited dispatcher unless an explicit dispatcher override is provided
-- install actor naming automatically so coroutine names align with `actorLabel` where possible
+- install actor naming automatically so coroutine names align with `label` where possible
 - allow concrete actors to accept the prepared scope rather than requiring every caller to build it manually
 
 This preserves the current simple `spawn(factory)` shape as a low-level primitive while providing
@@ -1166,7 +1180,7 @@ Implemented:
 
 - `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/actor/Actor.kt`
 - `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/actor/ActorRef.kt`
-- `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/actor/ReplyingCommand.kt`
+- `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/actor/RequestReply.kt`
 
 Consumers still to migrate:
 
@@ -1188,7 +1202,7 @@ Consumers still to migrate:
 - `tell(...)` returns `Result<Unit>`.
 - `ask(...)` returns `Result<Reply>` and always requires a timeout.
 - Public failures are compressed to unavailable / timeout / command-failed.
-- `ActorUnavailableException` carries a reason enum for closed / full / not-delivered.
+- `ActorUnavailable` carries a reason enum for closed / full / not-delivered.
 - Actor names are semantic labels and may collide.
 - Each actor also has a process-local unique diagnostic label of the form `name#instanceId`.
 - An exception escaping `handle(...)` stops the actor.
