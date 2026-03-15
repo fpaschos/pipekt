@@ -7,7 +7,6 @@ import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.ChannelResult
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -28,20 +27,6 @@ internal enum class ActorLifecycle {
     SHUTTING_DOWN,
     SHUTDOWN,
 }
-
-/**
- * Thrown when a command is sent to an actor that is not accepting (e.g. already shut down).
- */
-internal class ActorMailboxClosedException(
-    actorName: String,
-) : IllegalStateException("$actorName is not accepting new commands")
-
-/**
- * Thrown when [Channel.trySend] fails because the mailbox is at capacity.
- */
-internal class ActorMailboxFullException(
-    actorName: String,
-) : IllegalStateException("$actorName mailbox is full")
 
 /**
  * Base actor infrastructure: mailbox, loop job, startup/termination barriers, lifecycle,
@@ -69,6 +54,21 @@ abstract class Actor<Command : Any>(
     private val terminated = CompletableDeferred<Unit>()
 
     private val lifecycle = atomic(ActorLifecycle.STARTING)
+
+    /** Typed ref used by outsiders and peer actors to interact with this actor. */
+    fun self(): ActorRef<Command> = actorRef
+
+    private val actorRef =
+        object : ActorRef<Command> {
+            override val actorName: String
+                get() = this@Actor.actorName
+
+            override fun tell(command: Command): Result<Unit> = send(command)
+
+            override suspend fun shutdown(timeout: Duration?) {
+                this@Actor.shutdown(timeout = timeout)
+            }
+        }
 
     private val loopJob: Job =
         scope.launch(CoroutineName(actorName)) {
@@ -173,52 +173,39 @@ abstract class Actor<Command : Any>(
         cause: Throwable,
     ) {
         if (command is ReplyingCommand) {
-            command.completeExceptionally(cause)
-        }
-    }
-
-    /** Throws if [lifecycle] is not [ActorLifecycle.RUNNING]. */
-    protected fun ensureAccepting() {
-        check(lifecycle.value == ActorLifecycle.RUNNING) {
-            "$actorName is not accepting new commands: ${lifecycle.value}"
+            command.completeExceptionally(ActorCommandFailed(actorName, cause))
         }
     }
 
     /**
-     * Non-blocking send. When not [ActorLifecycle.RUNNING], throws [ActorMailboxClosedException].
-     * When RUNNING, returns the result of [Channel.trySend]; callers must check [ChannelResult.isSuccess]
-     * or throw [ActorMailboxFullException] when full.
+     * Non-blocking send.
+     *
+     * Returns [Result.success] when [command] is accepted into the mailbox.
+     * Returns [Result.failure] with [ActorUnavailable] when the actor is not
+     * accepting commands or when the mailbox cannot accept the command.
      */
-    protected fun trySend(command: Command): ChannelResult<Unit> {
+    protected fun send(command: Command): Result<Unit> {
         if (lifecycle.value != ActorLifecycle.RUNNING) {
-            throw ActorMailboxClosedException(actorName)
+            return Result.failure(
+                ActorUnavailable(
+                    reason = ActorUnavailableReason.ACTOR_CLOSED,
+                    actorName = actorName,
+                ),
+            )
         }
-        return mailbox.trySend(command)
-    }
 
-    /**
-     * One-way send. Throws [ActorMailboxClosedException] or [ActorMailboxFullException]
-     * if the actor is not accepting or the mailbox is full.
-     */
-    protected fun send(command: Command) {
-        val result = trySend(command)
-        if (!result.isSuccess) {
-            throw result.exceptionOrNull() ?: ActorMailboxFullException(actorName)
+        val result = mailbox.trySend(command)
+        return if (result.isSuccess) {
+            Result.success(Unit)
+        } else {
+            Result.failure(
+                ActorUnavailable(
+                    reason = ActorUnavailableReason.MAILBOX_FULL,
+                    actorName = actorName,
+                    cause = result.exceptionOrNull(),
+                ),
+            )
         }
-    }
-
-    /**
-     * Request/reply: build a command that carries [CompletableDeferred], send it, and await the result.
-     * Throws if not accepting or mailbox full.
-     */
-    protected suspend fun <R> request(build: (CompletableDeferred<R>) -> Command): R {
-        ensureAccepting()
-        val reply = CompletableDeferred<R>()
-        val result = trySend(build(reply))
-        if (!result.isSuccess) {
-            throw result.exceptionOrNull() ?: ActorMailboxFullException(actorName)
-        }
-        return reply.await()
     }
 
     /**
@@ -257,9 +244,12 @@ abstract class Actor<Command : Any>(
                         lifecycle.value = ActorLifecycle.SHUTTING_DOWN
                         true
                     }
+
                     ActorLifecycle.SHUTTING_DOWN,
                     ActorLifecycle.SHUTDOWN,
-                    -> false
+                    -> {
+                        false
+                    }
                 }
             }
 
@@ -273,6 +263,7 @@ abstract class Actor<Command : Any>(
         mailbox.close()
 
         suspend fun forceShutdown() {
+            failPendingReplies()
             // Hard stop: cancel the actor loop and wait until final termination is observed.
             loopJob.cancel()
             terminated.await()
@@ -307,4 +298,27 @@ abstract class Actor<Command : Any>(
             forceShutdown()
         }
     }
+
+    private fun failPendingReplies() {
+        while (true) {
+            val buffered = mailbox.tryReceive().getOrNull() ?: return
+            if (buffered is ReplyingCommand) {
+                buffered.completeExceptionally(
+                    ActorUnavailable(
+                        reason = ActorUnavailableReason.NOT_DELIVERED,
+                        actorName = actorName,
+                    ),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Starts an actor, waits for startup to complete, and returns its typed ref.
+ */
+suspend fun <Command : Any> spawn(factory: () -> Actor<Command>): ActorRef<Command> {
+    val actor = factory()
+    actor.awaitStarted()
+    return actor.self()
 }

@@ -3,13 +3,28 @@ package io.github.fpaschos.pipekt.actor
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
-import kotlin.time.Duration
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 sealed interface TestCommand {
+    data class Record(
+        val value: String,
+    ) : TestCommand
+
     data class Ping(
         val value: String,
         val reply: CompletableDeferred<String>,
-    ) : TestCommand, ReplyingCommand {
+    ) : TestCommand,
+        ReplyingCommand {
+        override fun completeExceptionally(cause: Throwable) {
+            reply.completeExceptionally(cause)
+        }
+    }
+
+    data class Snapshot(
+        val reply: CompletableDeferred<List<String>>,
+    ) : TestCommand,
+        ReplyingCommand {
         override fun completeExceptionally(cause: Throwable) {
             reply.completeExceptionally(cause)
         }
@@ -17,7 +32,19 @@ sealed interface TestCommand {
 
     data class Fail(
         val reply: CompletableDeferred<String>,
-    ) : TestCommand, ReplyingCommand {
+    ) : TestCommand,
+        ReplyingCommand {
+        override fun completeExceptionally(cause: Throwable) {
+            reply.completeExceptionally(cause)
+        }
+    }
+
+    data class SlowPing(
+        val value: String,
+        val gate: CompletableDeferred<Unit>,
+        val reply: CompletableDeferred<String>,
+    ) : TestCommand,
+        ReplyingCommand {
         override fun completeExceptionally(cause: Throwable) {
             reply.completeExceptionally(cause)
         }
@@ -27,39 +54,56 @@ sealed interface TestCommand {
 class MinimalActor(
     scope: CoroutineScope,
     name: String,
+    private val events: MutableList<String> = mutableListOf(),
+    private val startupGate: CompletableDeferred<Unit>? = null,
 ) : Actor<TestCommand>(scope, name, Channel.BUFFERED) {
+    private val recorded = mutableListOf<String>()
+    private val stateMutex = Mutex()
+
+    override suspend fun postStart() {
+        events.add("postStart:begin")
+        startupGate?.await()
+        events.add("postStart:end")
+    }
+
     override suspend fun handle(command: TestCommand) {
         when (command) {
-            is TestCommand.Ping -> command.reply.complete("echo: ${command.value}")
-            is TestCommand.Fail -> error("boom")
+            is TestCommand.Record -> {
+                stateMutex.withLock {
+                    recorded += command.value
+                }
+                events.add("handle:record:${command.value}")
+            }
+
+            is TestCommand.Ping -> {
+                events.add("handle:ping:${command.value}")
+                command.reply.complete("echo: ${command.value}")
+            }
+
+            is TestCommand.Snapshot -> {
+                events.add("handle:snapshot")
+                command.reply.complete(stateMutex.withLock { recorded.toList() })
+            }
+
+            is TestCommand.Fail -> {
+                events.add("handle:fail")
+                error("boom")
+            }
+
+            is TestCommand.SlowPing -> {
+                events.add("handle:slow-ping:${command.value}:begin")
+                command.gate.await()
+                events.add("handle:slow-ping:${command.value}:end")
+                command.reply.complete("echo: ${command.value}")
+            }
         }
     }
 
-    suspend fun ping(value: String): String = request { reply -> TestCommand.Ping(value, reply) }
-
-    suspend fun fail(): String = request { reply -> TestCommand.Fail(reply) }
-
-    suspend fun shutdownInternal(timeout: Duration?) {
-        shutdown(timeout = timeout)
+    override suspend fun preStop() {
+        events.add("preStop")
     }
 
-    companion object {
-        suspend fun spawn(scope: CoroutineScope): MinimalActorRef {
-            val actor = MinimalActor(scope, "test-echo-actor")
-            actor.awaitStarted()
-            return MinimalActorRef(actor)
-        }
-    }
-}
-
-class MinimalActorRef(
-    private val actor: MinimalActor,
-) : ActorRef() {
-    suspend fun ping(value: String): String = actor.ping(value)
-
-    suspend fun fail(): String = actor.fail()
-
-    override suspend fun shutdownActor(timeout: Duration?) {
-        actor.shutdownInternal(timeout)
+    override suspend fun postStop() {
+        events.add("postStop")
     }
 }

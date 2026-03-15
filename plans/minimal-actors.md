@@ -1,8 +1,8 @@
-# Minimal actors for PipeKt runtime
+# Minimal actors for PipeKt
 
-**Purpose:** Define one canonical actor implementation model for `pipekt.runtime`, including lifecycle, startup, shutdown, bounded mailbox behavior, command failure handling, `ActorRef`, request/reply helpers, and actor-specific side jobs. `PipelineOrchestrator` is used as a worked example, not as the only target actor.
+**Purpose:** Define the canonical actor model used in PipeKt. This document is synchronized to the current implementation in `io.github.fpaschos.pipekt.actor` and describes how runtime components should consume it. `PipelineOrchestrator` is used as a worked example, not as the only target actor.
 
-**Status:** Planning. Intended to drive implementation directly.
+**Status:** Active design and implementation reference.
 
 **Related:** [pipeline-implementation-v2.md](pipeline-implementation-v2.md), [streams-technical-requirements.md](streams-technical-requirements.md), [streams-core-architecture.md](streams-core-architecture.md).
 
@@ -10,78 +10,84 @@
 
 ## 1. Scope
 
-This document standardizes the minimal actor infrastructure used inside `pipekt.runtime`.
+This document standardizes the minimal actor infrastructure used in PipeKt.
 
-It applies to any actor-like entity inside `pipekt.runtime`, including:
+It applies to:
 
-- common mailbox-driven runtime components
-- `PipelineOrchestrator`
-- `PipelineRuntimeV2`
-- future actor-like runtime coordinators
+- shared actor primitives in `io.github.fpaschos.pipekt.actor`
+- runtime coordinators such as `PipelineOrchestrator`
+- future actor-like runtime components
 
-It does not introduce a public actor framework. The base `Actor` remains an internal runtime primitive.
+It does not introduce a general public actor framework. The shared actor package is intentionally small and capability-oriented.
 
 ---
 
 ## 2. Goals
 
 - Remove repeated actor bootstrapping code from runtime classes.
-- Remove public `start()` methods whose only purpose is to launch the mailbox loop.
+- Remove public `start()` methods whose only purpose is to launch a mailbox loop.
 - Separate actor infrastructure from domain commands.
-- Give each actor a clear external handle (`ActorRef` or domain-specific ref).
-- Support actor-specific side jobs such as watchdogs, pollers, reapers, and child cleanup.
-- Support bounded mailbox behavior and explicit rejection semantics.
-- Support bounded shutdown semantics instead of treating shutdown as a normal mailbox command.
-- Make startup, shutdown, and failure behavior explicit.
+- Expose actors externally only through generic typed refs.
+- Support universal `tell` and `ask` without per-actor ref boilerplate.
+- Let actors and non-actor callers interact through the same ref abstraction.
+- Provide a universal generic `spawn(...)` entry point.
+- Support actor-owned startup and shutdown hooks.
+- Make startup, shutdown, failure handling, and mailbox semantics explicit.
+- Keep actor transport ergonomics compact and Kotlin-idiomatic.
+- Keep the hot path mailbox-serialized and lightweight.
 
 ---
 
 ## 3. Non-goals
 
-- No Akka-like supervision tree API in v1.
-- No automatic actor restart in place.
-- No priority mailbox in v1.
+- No supervision tree.
+- No automatic actor restart.
+- No priority mailbox.
+- No actor system object.
+- No actor context object.
 - No public generic actor DSL.
-- No public raw message endpoint where callers can send arbitrary mailbox commands.
+- No Akka-style behavior model.
 
 ---
 
 ## 4. Core design
 
-The canonical actor model has three layers:
+The actor model has three layers:
 
 1. `Actor<Command>`
-   - Internal shared infrastructure.
-   - Owns mailbox, loop job, startup barrier, termination barrier, lifecycle state, command delivery helpers, and shutdown behavior.
-   - Uses a lifecycle-only `Mutex` to coordinate startup/shutdown transitions, not normal command handling.
+   - Shared infrastructure.
+   - Owns mailbox, loop job, startup barrier, termination barrier, lifecycle state, and shutdown behavior.
 
 2. Concrete actor implementation
    - Defines a sealed command protocol `Command`.
    - Implements `handle(command)`.
-   - Optionally starts and stops actor-specific side jobs via `postStart()` and `preStop()`.
+   - Optionally overrides `postStart()`, `preStop()`, and `postStop()`.
 
-3. `ActorRef`
-   - Narrow external API returned by `spawn(...)`.
-   - Implemented as an abstract base ref, not an interface.
-   - Exposes business operations plus shutdown.
-   - Does not expose mailbox, jobs, or mutable internal state.
+3. `ActorRef<Command>`
+   - Generic typed handle returned by `spawn(...)`.
+   - Exposes universal `tell(command)` and `ask(...)`.
+   - Is the only supported way actors or outsiders communicate with an actor.
+   - Does not expose mailbox or internal mutable state.
 
-Construction is standardized:
+Construction rules:
 
 - actor constructors are `private` or `internal`
-- `spawn(...)` creates the actor
-- `spawn(...)` waits until startup succeeds
-- `spawn(...)` returns the ref, not the raw actor
+- `spawn(...)` is the construction entry point
+- `spawn(...)` waits for startup to succeed
+- the loop is not started from `init`
 
-The command loop is not started from `init`, and not exposed as a separate public lifecycle concern.
+Design constraints:
+
+- there is no `ActorSystem`
+- there is no `ActorContext`
+- actors are modeled as classes, not returned behaviors
+- child actor creation, if needed later, should build on the same generic `spawn(...)` primitive rather than a required context object
 
 ---
 
-## 5. Actor lifecycle
+## 5. Lifecycle model
 
-### 5.1 States
-
-All actors use the same infrastructure lifecycle:
+### 5.1 Infrastructure lifecycle
 
 ```kotlin
 internal enum class ActorLifecycle {
@@ -96,33 +102,37 @@ Meaning:
 
 - `STARTING`: actor exists but `postStart()` has not completed successfully yet
 - `RUNNING`: accepts new commands
-- `SHUTTING_DOWN`: no new commands accepted; actor is draining or being cancelled
-- `SHUTDOWN`: loop terminated and cleanup completed
+- `SHUTTING_DOWN`: no new commands accepted; termination is in progress
+- `SHUTDOWN`: loop terminated and terminal cleanup completed
 
 ### 5.2 Domain lifecycle vs actor lifecycle
 
-Actor lifecycle is infrastructure-level and separate from domain state.
+Actor lifecycle is infrastructure-level only.
 
-Example actor-specific domain states may include:
+Examples:
 
-- `PipelineRuntimeV2` may still keep `PipelineLifecycle.NEW/RUNNING/SHUTDOWN` for the pipeline run itself
-- another coordinator actor may keep its own `IDLE/ACTIVE/FAILED` domain lifecycle
+- `PipelineRuntimeV2` may still keep its own domain lifecycle
+- a future coordinator actor may keep `IDLE/ACTIVE/FAILED`
 - `ActorLifecycle` only answers whether the mailbox host is alive and accepting commands
 
-Do not collapse those concepts into a single enum.
+Do not collapse domain state into actor infrastructure state.
 
 ---
 
-## 6. Base `Actor` contract
+## 6. Shared actor package
 
-File target:
+The current implementation lives under:
 
-- `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/runtime/Actor.kt`
+- `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/actor/Actor.kt`
+- `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/actor/ActorRef.kt`
+- `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/actor/ReplyingCommand.kt`
+
+### 6.1 `Actor.kt`
 
 Reference implementation:
 
 ```kotlin
-package io.github.fpaschos.pipekt.runtime
+package io.github.fpaschos.pipekt.actor
 
 import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CancellationException
@@ -138,6 +148,14 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Duration
 
+/**
+ * Lifecycle states for the shared actor infrastructure.
+ *
+ * - [STARTING]: Actor exists but [Actor.postStart] has not completed successfully yet.
+ * - [RUNNING]: Accepts new commands.
+ * - [SHUTTING_DOWN]: No new commands accepted; draining or being cancelled.
+ * - [SHUTDOWN]: Loop terminated and cleanup completed.
+ */
 internal enum class ActorLifecycle {
     STARTING,
     RUNNING,
@@ -145,19 +163,57 @@ internal enum class ActorLifecycle {
     SHUTDOWN,
 }
 
-internal class ActorMailboxClosedException(
-    actorName: String,
-) : IllegalStateException("$actorName is not accepting new commands")
+/**
+ * Base failure type for actor transport and execution failures surfaced through [Result].
+ */
+sealed class ActorException(
+    message: String,
+    cause: Throwable? = null,
+) : Exception(message, cause)
 
-internal class ActorMailboxFullException(
+/**
+ * Actor could not accept a command or could not complete a previously accepted command
+ * because it became unavailable.
+ */
+class ActorUnavailableException(
     actorName: String,
-) : IllegalStateException("$actorName mailbox is full")
+) : ActorException("$actorName is unavailable")
 
-internal abstract class Actor<Command : Any>(
+/**
+ * Request/reply did not complete before the ask timeout elapsed.
+ */
+class ActorAskTimeoutException(
+    actorName: String,
+    timeout: Duration,
+) : ActorException("$actorName did not reply within $timeout")
+
+/**
+ * Actor command handling failed after the command was accepted.
+ */
+class ActorCommandFailedException(
+    actorName: String,
+    cause: Throwable,
+) : ActorException("$actorName command failed", cause)
+
+/**
+ * Base actor infrastructure: mailbox, loop job, startup/termination barriers, lifecycle,
+ * and shutdown behavior. Concrete actors define [Command], implement [handle], and
+ * optionally override [postStart] and [preStop].
+ *
+ * Construction is via a suspend `spawn(...)` that waits for [awaitStarted] and returns
+ * a ref; the loop is not started from `init` and is not a separate public lifecycle.
+ *
+ * @param Command Sealed command type for this actor.
+ * @param scope Scope that owns the mailbox loop; cancellation of this scope terminates the actor.
+ * @param actorName Name used for the loop coroutine and error messages.
+ * @param capacity Mailbox channel capacity; default is [Channel.BUFFERED].
+ */
+abstract class Actor<Command : Any>(
     private val scope: CoroutineScope,
     private val actorName: String,
     capacity: Int = Channel.BUFFERED,
 ) {
+    /** Bounded mailbox for commands. */
     protected val mailbox = Channel<Command>(capacity)
 
     private val lifecycleMutex = Mutex()
@@ -170,40 +226,45 @@ internal abstract class Actor<Command : Any>(
         scope.launch(CoroutineName(actorName)) {
             try {
                 // Run actor-owned startup before the actor becomes externally usable.
-                // If this throws, spawn()/awaitStarted() must fail.
+                // If this throws, spawn()/awaitStarted() fail and no ref is returned.
                 postStart()
 
-                lifecycleMutex.withLock {
-                    // Shutdown may have won the race while postStart() was running.
-                    // Only a coroutine that still sees STARTING may publish RUNNING.
-                    if (lifecycle.value != ActorLifecycle.STARTING) {
-                        if (!started.isCompleted) {
-                            started.completeExceptionally(
-                                CancellationException("$actorName was stopped during startup"),
-                            )
+                // Only a coroutine that still sees STARTING may publish RUNNING.
+                // Shutdown may have won the race while postStart() was running.
+                val startedNow =
+                    lifecycleMutex.withLock {
+                        if (lifecycle.value != ActorLifecycle.STARTING) {
+                            false
+                        } else {
+                            lifecycle.value = ActorLifecycle.RUNNING
+                            true
                         }
-                        // Exit without entering the normal mailbox drain loop.
-                        return@launch
                     }
 
-                    // Publish the actor as started. From this point, refs may use it.
-                    lifecycle.value = ActorLifecycle.RUNNING
-                    started.complete(Unit)
+                if (!startedNow) {
+                    // Exit without entering the mailbox drain loop; fail startup so spawn() does not hang.
+                    if (!started.isCompleted) {
+                        started.completeExceptionally(
+                            CancellationException("$actorName was stopped during startup"),
+                        )
+                    }
+                    return@launch
                 }
 
-                // Main actor loop: drain mailbox commands one at a time.
+                // Publish the actor as started. From this point, refs may use it.
+                started.complete(Unit)
+
+                // Drain mailbox commands one at a time.
                 for (command in mailbox) {
                     try {
-                        // Command handling is the serialized mutation point for actor state.
                         handle(command)
                     } catch (t: Throwable) {
-                        // Command failure is handled separately from startup/loop infrastructure failure.
+                        // Command failure is non-fatal; actor keeps running.
                         onUnhandledCommandFailure(command, t)
                     }
                 }
             } catch (t: Throwable) {
-                // Startup or loop infrastructure failed. If startup was not published yet,
-                // fail the startup barrier so spawn()/awaitStarted() do not hang.
+                // Startup or loop infrastructure failed; fail the startup barrier so spawn()/awaitStarted() do not hang.
                 if (!started.isCompleted) {
                     started.completeExceptionally(t)
                 }
@@ -211,69 +272,106 @@ internal abstract class Actor<Command : Any>(
             } finally {
                 // Publish terminal lifecycle before releasing shutdown waiters.
                 lifecycle.value = ActorLifecycle.SHUTDOWN
-                // Termination barrier: shutdown callers and tests can now observe completion.
-                terminated.complete(Unit)
+                try {
+                    postStop()
+                } finally {
+                    // Shutdown callers and tests can now observe completion.
+                    terminated.complete(Unit)
+                }
             }
         }
 
+    /**
+     * Suspends until the actor has transitioned to [ActorLifecycle.RUNNING].
+     * Fails if startup failed or the actor was stopped during startup.
+     */
     suspend fun awaitStarted() {
         started.await()
     }
 
+    /**
+     * Suspends until the actor loop has terminated and [ActorLifecycle.SHUTDOWN] is set.
+     */
     suspend fun awaitTerminated() {
         terminated.await()
     }
 
+    /** Process one command. Called from the mailbox loop; one failure does not kill the actor. */
     protected abstract suspend fun handle(command: Command)
 
+    /**
+     * Hook run before the mailbox drain loop starts. Use for actor-specific side jobs
+     * (watchdogs, pollers, child cleanup). Failures here cause startup to fail.
+     */
     protected open suspend fun postStart() {}
 
+    /**
+     * Hook run when shutdown begins, after the mailbox is closed. Use to stop side jobs
+     * and release actor-owned resources.
+     */
     protected open suspend fun preStop() {}
 
+    /**
+     * Hook run after the actor loop has terminated. Use this when cleanup must happen
+     * only after command draining/cancellation has completed.
+     */
+    protected open suspend fun postStop() {}
+
+    /**
+     * Called when [handle] throws. Default is non-fatal; override to complete replies
+     * exceptionally or record failures in an actor-specific way.
+     */
     protected open suspend fun onUnhandledCommandFailure(
         command: Command,
         cause: Throwable,
     ) {
-        // Default behavior is non-fatal. Concrete actors should complete replies exceptionally
-        // or record the failure through actor-specific observability.
+        if (command is ReplyingCommand) {
+            command.completeExceptionally(cause)
+        }
     }
 
+    /** Throws if [lifecycle] is not [ActorLifecycle.RUNNING]. */
     protected fun ensureAccepting() {
         check(lifecycle.value == ActorLifecycle.RUNNING) {
             "$actorName is not accepting new commands: ${lifecycle.value}"
         }
     }
 
-    protected fun trySend(command: Command): ChannelResult<Unit> {
-        return when (lifecycle.value) {
-            ActorLifecycle.RUNNING -> mailbox.trySend(command)
-            ActorLifecycle.STARTING,
-            ActorLifecycle.SHUTTING_DOWN,
-            ActorLifecycle.SHUTDOWN,
-            -> ChannelResult.closed(ActorMailboxClosedException(actorName))
-        }
-    }
+    /**
+     * Non-blocking enqueue attempt used by the ref implementation.
+     *
+     * Implementations should normalize mailbox closure/full races into [Result.failure]
+     * with [ActorUnavailableException] instead of leaking raw channel exceptions.
+     */
+    protected fun trySend(command: Command): ChannelResult<Unit>
 
-    protected fun send(command: Command) {
-        val result = trySend(command)
-        result.getOrElse { cause ->
-            throw cause ?: ActorMailboxFullException(actorName)
+    /**
+     * Shuts down the actor.
+     *
+     * Shutdown is single-flight: only the first caller performs the state transition and
+     * shutdown work; later callers simply wait for [awaitTerminated].
+     *
+     * Shutdown order:
+     * 1. Move the actor from [ActorLifecycle.STARTING] or [ActorLifecycle.RUNNING] to
+     *    [ActorLifecycle.SHUTTING_DOWN].
+     * 2. Close the mailbox so no new commands are accepted.
+     * 3. If [gracefully] is `true`, run [preStop] and allow the actor to terminate normally.
+     * 4. If graceful shutdown exceeds [timeout], or if [gracefully] is `false`, cancel the
+     *    actor loop and wait for termination.
+     *
+     * Notes:
+     * - [timeout] only has meaning when [gracefully] is `true`.
+     * - [preStop] is included in the graceful timeout budget, so it must be cancellation-cooperative.
+     * - When this function returns, the actor loop has terminated.
+     */
+    protected suspend fun shutdown(
+        gracefully: Boolean = true,
+        timeout: Duration? = null,
+    ) {
+        require(gracefully || timeout == null) {
+            "timeout is only valid when gracefully = true"
         }
-    }
 
-    protected suspend fun <R> request(
-        build: (CompletableDeferred<R>) -> Command,
-    ): R {
-        ensureAccepting()
-        val reply = CompletableDeferred<R>()
-        val result = trySend(build(reply))
-        result.getOrElse { cause ->
-            throw cause ?: ActorMailboxFullException(actorName)
-        }
-        return reply.await()
-    }
-
-    protected suspend fun shutdownGracefully(timeout: Duration? = null) {
         val shouldStop =
             lifecycleMutex.withLock {
                 when (lifecycle.value) {
@@ -289,146 +387,182 @@ internal abstract class Actor<Command : Any>(
                 }
             }
 
-        if (shouldStop) {
-            mailbox.close()
-            preStop()
-        }
-
-        if (timeout == null) {
+        if (!shouldStop) {
             terminated.await()
             return
         }
 
-        val completed = withTimeoutOrNull(timeout) {
-            terminated.await()
-            true
-        } == true
+        // Stop accepting new work immediately. Buffered commands may still drain unless we
+        // later escalate to loop cancellation.
+        mailbox.close()
 
-        if (!completed) {
+        suspend fun forceShutdown() {
+            // Hard stop: cancel the actor loop and wait until final termination is observed.
             loopJob.cancel()
             terminated.await()
         }
-    }
 
-    protected suspend fun shutdownNow() {
-        val shouldStop =
-            lifecycleMutex.withLock {
-                when (lifecycle.value) {
-                    ActorLifecycle.STARTING,
-                    ActorLifecycle.RUNNING,
-                    -> {
-                        lifecycle.value = ActorLifecycle.SHUTTING_DOWN
-                        true
-                    }
-                    ActorLifecycle.SHUTTING_DOWN,
-                    ActorLifecycle.SHUTDOWN,
-                    -> false
-                }
-            }
-
-        if (shouldStop) {
-            mailbox.close()
-            preStop()
+        if (!gracefully) {
+            // Immediate shutdown skips graceful waiting entirely.
+            forceShutdown()
+            return
         }
 
-        loopJob.cancel()
-        terminated.await()
+        if (timeout == null) {
+            // Unbounded graceful shutdown:
+            // 1. stop actor-owned side jobs/resources
+            // 2. allow normal loop termination
+            // 3. wait until termination is complete
+            preStop()
+            terminated.await()
+            return
+        }
+
+        val completedGracefully =
+            withTimeoutOrNull(timeout) {
+                // preStop is part of the graceful shutdown budget.
+                preStop()
+                terminated.await()
+                true
+            } == true
+
+        if (!completedGracefully) {
+            // Graceful shutdown exceeded the timeout. Escalate to hard cancellation.
+            forceShutdown()
+        }
     }
 }
 ```
 
-### 6.1 Required behavior
+### 6.2 `ReplyingCommand.kt`
 
-- The mailbox loop is created exactly once when the actor is instantiated.
-- No nullable `commandsLoop`.
-- Startup is acknowledged via `awaitStarted()`.
-- Termination is acknowledged via `awaitTerminated()`.
-- `send(...)` is the standard one-way internal command helper.
-- `request(...)` is the standard internal request/reply helper.
-- New requests are rejected once shutdown begins.
-- Mailbox delivery is bounded and fail-fast by default.
-- The `Mutex` is used only for lifecycle transitions and single-flight shutdown, never for normal command handling.
-- Lifecycle visibility is modeled with multiplatform atomics rather than JVM-only `@Volatile`.
+Reference implementation:
 
-### 6.2 Hook semantics
+```kotlin
+package io.github.fpaschos.pipekt.actor
 
-- `postStart()`
-  - Called from the actor loop coroutine before the mailbox drain loop begins.
-  - Use for actor-specific side jobs owned by the actor.
-  - Examples: a watchdog, periodic reconciliation, child registry sync, metrics sampler.
+/**
+ * Optional marker for commands that carry a reply handle.
+ *
+ * When [Actor.handle] throws and the command implements this interface, the base actor can
+ * complete the pending reply exceptionally instead of leaving the requester suspended forever.
+ */
+interface ReplyingCommand {
+    fun completeExceptionally(cause: Throwable)
+}
+```
 
-- `preStop()`
-  - Called when shutdown begins.
-  - Called after the mailbox is closed to new sends.
-  - Use for stopping side jobs and actor-owned resources while the actor is terminating.
-  - Examples: cancelling pollers, stopping child actors, releasing owned scopes.
+### 6.3 `ActorRef.kt`
 
-- `postStop()`
-  - Not part of the minimal base actor contract in v1.
-  - Add only if a concrete actor needs a true post-termination hook.
+Reference implementation:
 
-### 6.3 Why `postStart()` instead of `init`
+```kotlin
+package io.github.fpaschos.pipekt.actor
 
-- avoids `this` escaping from constructor logic
-- keeps startup tied to actor lifetime rather than object allocation
-- makes startup failure visible to `spawn(...)`
-- allows `spawn(...)` to be the only creation path
+import kotlinx.coroutines.CompletableDeferred
+import kotlin.time.Duration
 
-### 6.4 Why the `Mutex` exists
+/**
+ * Generic typed handle to an actor.
+ *
+ * All communication with actors, from inside or outside the actor layer, goes through
+ * [tell] or [ask]. Concrete per-actor ref subclasses are not required by the core model.
+ */
+interface ActorRef<in Command : Any> {
+    /**
+     * Sends a command without waiting for a reply.
+     *
+     * Result is [Result.success] when the command was accepted into the mailbox.
+     * Result is [Result.failure] with [ActorUnavailableException] when the actor cannot
+     * accept the command.
+     */
+    fun tell(command: Command): Result<Unit>
 
-The base actor keeps a `Mutex` for lifecycle transitions only.
+    /**
+     * Shuts down the actor. When this returns, the actor loop has terminated and no more
+     * commands are processed.
+     *
+     * @param timeout If non-null, graceful shutdown is attempted; if the timeout expires,
+     *   the implementation may force-cancel and then await termination.
+     */
+    suspend fun shutdown(timeout: Duration? = null)
+}
 
-It is needed because:
-
-- startup completion and external shutdown can race
-- multiple callers may try to shut the actor down concurrently
-- the mailbox loop alone does not serialize those external lifecycle transitions
-
-It is intentionally not used for:
-
-- protecting actor business state
-- wrapping `handle(command)`
-- wrapping long-running suspend cleanup
-
-This keeps the hot command path mailbox-serialized and lock-free, while making startup and shutdown transitions sound.
-
-### 6.5 Why atomic lifecycle state exists
-
-The base actor uses an atomic lifecycle state because this code is Kotlin Multiplatform.
-
-Why not `@Volatile`:
-
-- `@Volatile` is JVM-oriented and not the right common-model tool for KMP actor infrastructure
-- actor lifecycle is read from multiple coroutines outside the lifecycle mutex
-
-Why atomic state is used:
-
-- it gives multiplatform-safe visibility for read-mostly lifecycle checks
-- it keeps the fast path cheap for `ensureAccepting()` and `trySend()`
-- it works together with the `Mutex`, which still owns transition sequencing
+/**
+ * Universal request/reply helper built on reply-bearing commands.
+ *
+ * The actor library does not model response types in [ActorRef] directly. Instead, the
+ * command protocol carries the reply handle, and [ask] creates and awaits it.
+ */
+suspend fun <Command : Any, Reply> ActorRef<Command>.ask(
+    timeout: Duration,
+    build: (CompletableDeferred<Reply>) -> Command,
+): Result<Reply> {
+    val reply = CompletableDeferred<Reply>()
+    return TODO("reference shape only")
+}
+```
 
 ---
 
-## 7. External access model
+## 7. Concurrency model
 
-External callers interact only through typed refs.
+### 7.1 Why atomic + mutex are both used
 
-They do not:
+The actor uses:
 
-- call generic `send(...)`
-- call generic `request(...)`
-- send raw mailbox commands
-- inspect mailbox state
+- atomic lifecycle state for cheap cross-coroutine visibility on the fast path
+- `Mutex` only for coordinated lifecycle transitions
 
-This is intentional. Public callers address an actor only through the capabilities exposed by its ref.
+This split is intentional:
 
-Example:
+- `atomic` handles read-mostly checks like `ensureAccepting()` and `trySend()`
+- `Mutex` makes startup and shutdown state transitions single-flight and race-safe
 
-- `PipelineOrchestratorRef` exposes `startPipeline(...)`, `stopPipeline(...)`, `listPipelines()`, and `shutdown(...)`
-- `PipelineOrchestrator` may internally hold many `RuntimeRef`s
-- external code still never sees raw runtime mailbox commands
+The mutex is not used for:
 
-This differs from public `tell`-style actor APIs by design. For this library, typed capability refs are safer than exposing raw message transport.
+- command handling
+- actor business state mutation
+- long-running cleanup
+
+### 7.2 Startup sequence
+
+The loop startup sequence is:
+
+1. run `postStart()`
+2. under `lifecycleMutex`, verify lifecycle is still `STARTING`
+3. if yes, publish `RUNNING`
+4. complete `started`
+5. enter mailbox drain loop
+
+If shutdown wins during `postStart()`, startup fails and the actor exits without entering the drain loop.
+
+### 7.3 Shutdown sequence
+
+The shutdown sequence is:
+
+1. under `lifecycleMutex`, move to `SHUTTING_DOWN`
+2. close mailbox
+3. if graceful, run `preStop()` and wait for termination
+4. if timeout expires, cancel the loop
+5. in the loop `finally`, publish `SHUTDOWN`
+6. run `postStop()`
+7. complete `terminated`
+
+### 7.4 Why `preStop()` and `postStop()` both exist
+
+`preStop()`:
+
+- runs during shutdown initiation
+- is used to stop side jobs and owned resources
+- is part of the graceful shutdown budget
+
+`postStop()`:
+
+- runs after the loop has terminated
+- is used only for cleanup that must happen after draining or cancellation
+
+If an actor does not need true post-termination cleanup, it can ignore `postStop()`.
 
 ---
 
@@ -440,15 +574,14 @@ Default rule:
 
 - one failing command must not kill the actor unless the actor explicitly chooses that behavior
 
-This is why each mailbox dispatch is wrapped in its own `try/catch`.
+Implementation:
 
-Recommended concrete rule:
+- each mailbox dispatch is wrapped in `try/catch`
+- the base default is non-fatal
+- if the command implements `ReplyingCommand`, the base actor completes it exceptionally
+- command failures surfaced through `ask(...)` should be wrapped as `ActorCommandFailedException`
 
-- for reply-bearing commands, complete the reply exceptionally
-- for one-way commands, record or propagate failure in an actor-specific way
-- infrastructure failures in `postStart()` or in the actor loop itself may still terminate the actor
-
-`onUnhandledCommandFailure(...)` exists so each actor can decide how to surface a command-level failure. The base default is non-fatal.
+Concrete actors may still override `onUnhandledCommandFailure(...)` for domain-specific behavior.
 
 ### 8.2 Startup failure
 
@@ -456,22 +589,17 @@ If `postStart()` fails:
 
 - actor startup fails
 - `awaitStarted()` fails
-- `spawn(...)` must fail
+- `spawn(...)` fails
 - no ref should escape representing a half-started actor
-
-This is why `spawn(...)` should be `suspend` by default.
 
 ### 8.3 Restart strategy
 
-Automatic restart is out of scope in v1.
+Automatic restart is out of scope.
 
 Rule:
 
 - actors are one-shot
 - once terminated, create a new actor via `spawn(...)`
-- restart policy belongs above the actor layer, typically in application bootstrap or a higher-level coordinator
-
-This avoids hidden restart semantics around side jobs, child refs, and domain state.
 
 ---
 
@@ -481,544 +609,241 @@ This avoids hidden restart semantics around side jobs, child refs, and domain st
 
 The mailbox is finite and fail-fast by default.
 
-Why:
-
-- suspending indefinitely in public API methods is a poor default
-- unbounded growth hides overload and creates memory risk
-
 Default behavior:
 
 - `trySend(...)` is used internally
-- if the mailbox is full, actor methods fail immediately
-- if the actor is not accepting commands, actor methods fail immediately
+- if the mailbox is full, `tell(...)` / `ask(...)` return `Result.failure(ActorUnavailableException)`
+- if the actor is not accepting commands, `tell(...)` / `ask(...)` return `Result.failure(ActorUnavailableException)`
+- `tell(...)` does not suspend for mailbox space
+- mailbox capacity is a protection boundary, not a backpressure API
 
 ### 9.2 Rejection semantics
 
-Standard internal exceptions:
+Public transport failures are intentionally compressed:
 
-- `ActorMailboxFullException`
-- `ActorMailboxClosedException`
+- `ActorUnavailableException`
+- `ActorAskTimeoutException`
+- `ActorCommandFailedException`
 
-Concrete refs may translate these into domain-specific errors if needed, but the base actor behavior should stay consistent.
+This is a deliberate ergonomics tradeoff.
 
-### 9.3 No public ask/tell
+Callers usually care about only:
 
-There is no public generic equivalent of Akka `ask` or `tell`.
+- the actor could not accept or complete the command because it was unavailable
+- the actor did not reply before the timeout
+- the actor handled the command and failed
 
-Mapping in this design:
+The core library should avoid exposing more transport-specific exception types unless a
+real use case justifies them.
 
-- internal `send(...)` is the equivalent of `tell`
-- internal `request(...)` is the equivalent of `ask`
+### 9.3 Public tell/ask model
 
-But both belong to the actor implementation, not to the public ref contract.
+The public transport contract is intentionally small and universal:
 
-The mailbox helpers use verified coroutines APIs:
-
-- `Channel.trySend(...)`
-- `ChannelResult.closed(cause)`
-- `ChannelResult.getOrElse { cause -> ... }`
-
----
-
-## 10. Shutdown semantics
-
-Shutdown is not modeled as a normal mailbox command.
-
-Reason:
-
-- if shutdown is appended behind a very large queue, termination latency becomes unbounded
-- runtime control must be able to stop acceptance of new work independently of user traffic
-
-### 10.1 Graceful shutdown
-
-Graceful shutdown means:
-
-1. transition to `SHUTTING_DOWN`
-2. stop accepting new commands
-3. close the mailbox
-4. run `preStop()`
-5. allow already-buffered commands to drain
-6. wait for termination
-
-### 10.2 Forced shutdown
-
-Forced shutdown means:
-
-1. transition to `SHUTTING_DOWN`
-2. close mailbox
-3. run `preStop()`
-4. cancel the loop job
-5. wait for termination
-
-### 10.3 Public shutdown contract
-
-The default public contract should be:
-
-- graceful with optional timeout
-- if timeout expires, force cancel
-
-### 10.4 Shutdown concurrency
-
-Shutdown must be idempotent and single-flight.
+- `ActorRef<Command>.tell(command): Result<Unit>`
+- `ActorRef<Command>.ask(timeout) { reply -> Command(reply, ...) }: Result<Reply>`
 
 Rules:
 
-- the first shutdown caller initiates termination
-- concurrent shutdown callers wait for the same termination result
-- calls after `SHUTDOWN` return immediately
-
-The `lifecycleMutex` plus `terminated` barrier in `Actor` provide this behavior.
-
-The `Mutex` must guard only the state transition decision. It must not wrap `preStop()` or other long suspend work.
-
-### 10.5 Observable guarantee
-
-When a public `shutdown(...)` call returns:
-
-- the actor loop has terminated
-- actor-owned side jobs have been stopped
-- no more commands will be processed
-
-Always wait for termination before returning from public shutdown.
+- `tell(...)` is the universal one-way send
+- `tell(...)` is non-blocking and returns immediately
+- `ask(...)` is a helper layered on top of reply-bearing commands
+- `ask(...)` always requires a timeout
+- response typing belongs to the command protocol, not to `ActorRef` itself
+- there is no separate untyped public transport API in the core library
+- the public API uses Kotlin `Result` rather than exposing mailbox transport exceptions directly
 
 ---
 
-## 11. `ActorRef` contract
+## 10. External access model
 
-File target:
+External callers interact only through typed refs.
 
-- `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/runtime/ActorRef.kt`
-
-Reference implementation:
+Canonical shape:
 
 ```kotlin
-package io.github.fpaschos.pipekt.runtime
-
-import kotlin.time.Duration
-
-abstract class ActorRef {
-    suspend fun shutdown(timeout: Duration? = null) {
-        shutdownActor(timeout)
-    }
-
-    protected abstract suspend fun shutdownActor(timeout: Duration?)
+interface ActorRef<in Command : Any> {
+    fun tell(command: Command): Result<Unit>
+    suspend fun shutdown(timeout: Duration? = null)
 }
 ```
 
-Why an abstract class:
+They do not:
 
-- ref and actor stay separate objects
-- shutdown forwarding boilerplate is shared in one place
-- concrete refs still define their own business operations
+- access an actor instance directly
+- inspect mailbox state
 
-What does not belong on `ActorRef`:
+This is intentional. Public callers address actors only through a typed protocol.
 
-- `request(...)`
-- `send(...)`
-- mailbox access
-- lifecycle state inspection tied to actor internals
+The same rule applies to actor-to-actor communication:
 
-The ref is a capability wrapper, not a raw actor transport.
+- one actor talks to another only through `ActorRef<Command>`
+- actors do not call each other's internal methods directly
 
 ---
 
-## 12. Spawn pattern
+## 11. Spawn pattern
 
-Every actor follows this construction rule:
+The library should expose a universal generic `spawn(...)` function.
 
 ```kotlin
-companion object {
-    suspend fun spawn(...): SomeActorRef {
-        val actor = SomeActor(...)
-        actor.awaitStarted()
-        return SomeActorRef(actor)
-    }
+suspend fun <Command : Any> spawn(
+    factory: () -> Actor<Command>,
+): ActorRef<Command> {
+    val actor = factory()
+    actor.awaitStarted()
+    return actor.ref
 }
 ```
 
 Rules:
 
-- `spawn(...)` should be `suspend` by default
+- `spawn(...)` should be `suspend`
 - `spawn(...)` must not return before startup succeeds
-- public callers never invoke a separate public loop-boot `start()`
-- public constructors should be avoided for actor implementations
+- callers never invoke a separate public loop-boot `start()`
+- outsiders start actors through `spawn(...)`, not via public constructors
+- actor constructors should remain `private` or `internal`
+- concrete actors may still offer companion helpers, but those helpers should delegate to the generic `spawn(...)`
+
+### 11.1 Why there is no actor system
+
+This design does not require an `ActorSystem`.
+
+Reasoning:
+
+- PipeKt does not need a registry, supervision tree, or framework-wide runtime object
+- the current `Actor` base already owns the mailbox loop and startup/termination barriers
+- a top-level generic `spawn(...)` is sufficient to construct actors and return typed refs
+
+If a future need appears for shared actor runtime services, that can be introduced later.
+It is not part of the minimal actor model.
+
+### 11.2 Why there is no actor context
+
+This design does not require an `ActorContext`.
+
+Reasoning:
+
+- actors are implemented as classes with local state and lifecycle hooks
+- `handle(command)` is sufficient for the intended use cases
+- PipeKt does not currently need behavior switching, watchers, timers, or context-bound spawn APIs
+
+If child spawning is added later, it should build on the same generic `spawn(...)` primitive
+without forcing a context object into every actor API.
 
 ---
 
-## 13. Worked example: `PipelineOrchestrator`
+## 12. Worked example: `PipelineOrchestrator`
 
-File target:
+`PipelineOrchestrator` has not yet been migrated to this actor package, but when it is, it should consume the shared actor primitives above.
 
-- `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/runtime/PipelineOrchestrator.kt`
+### 12.1 Responsibilities
 
-### 13.1 Responsibilities
+`PipelineOrchestrator` should:
 
-`PipelineOrchestrator` is one concrete actor using this model. It:
+- own the map of active runtimes by pipeline name
+- serialize pipeline start/stop/list operations
+- own one store-level watchdog loop
+- create runtime refs for started pipelines
+- shut down all active runtimes when the orchestrator stops
 
-- owns the map of active runtimes by pipeline name
-- serializes pipeline start/stop/list operations
-- owns one store-level watchdog loop
-- creates runtime refs for started pipelines
-- shuts down all active runtimes when the orchestrator stops
+### 12.2 Scope model
 
-The orchestrator example uses two scopes:
+The orchestrator should use two scopes:
 
 - `actorScope`: runs the actor loop
 - `childScope`: owns watchdog and child runtimes
 
-This separation is required so actor-owned child cleanup does not cancel the actor loop out from under itself.
+This prevents actor-owned child cleanup from cancelling the actor loop out from under itself.
 
-### 13.2 State model
-
-Canonical minimal state:
+### 12.3 Example protocol shape
 
 ```kotlin
-private val runtimeByPipeline = mutableMapOf<String, RuntimeRef>()
-private var watchdog: Job? = null
-```
-
-Do not keep competing maps unless the external API truly requires them.
-
-### 13.3 Ref shape
-
-```kotlin
-package io.github.fpaschos.pipekt.runtime
-
-import io.github.fpaschos.pipekt.core.PipelineDefinition
-import kotlin.time.Duration
-
-class PipelineOrchestratorRef internal constructor(
-    private val actor: PipelineOrchestrator,
-) : ActorRef() {
-    suspend fun startPipeline(
-        definition: PipelineDefinition,
-        planVersion: String,
-        config: RuntimeConfig = RuntimeConfig(),
-    ): RuntimeRef =
-        actor.startPipelineInternal(definition, planVersion, config)
-
-    suspend fun stopPipeline(pipelineName: String) {
-        actor.stopPipelineInternal(pipelineName)
-    }
-
-    suspend fun listPipelines(): Set<String> =
-        actor.listPipelinesInternal()
-
-    override suspend fun shutdownActor(timeout: Duration?) {
-        actor.shutdownInternal(timeout)
-    }
-}
-```
-
-### 13.4 Command protocol
-
-```kotlin
-internal sealed interface Command {
+sealed interface PipelineOrchestratorCommand {
     data class StartPipeline(
         val definition: PipelineDefinition,
         val planVersion: String,
         val config: RuntimeConfig,
         val reply: CompletableDeferred<RuntimeRef>,
-    ) : Command
+    ) : PipelineOrchestratorCommand, ReplyingCommand
 
-    data class StopPipelineByName(
+    data class StopPipeline(
         val pipelineName: String,
-        val reply: CompletableDeferred<Unit>,
-    ) : Command
+    ) : PipelineOrchestratorCommand
 
     data class ListPipelines(
         val reply: CompletableDeferred<Set<String>>,
-    ) : Command
+    ) : PipelineOrchestratorCommand, ReplyingCommand
 }
 ```
 
-### 13.5 Reference implementation
+In this model the public handle is simply:
 
 ```kotlin
-package io.github.fpaschos.pipekt.runtime
-
-import io.github.fpaschos.pipekt.core.PayloadSerializer
-import io.github.fpaschos.pipekt.core.PipelineDefinition
-import io.github.fpaschos.pipekt.store.DurableStore
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineName
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import kotlin.time.Clock
-import kotlin.time.Duration
-
-internal class PipelineOrchestrator private constructor(
-    private val store: DurableStore,
-    private val serializer: PayloadSerializer,
-    private val config: OrchestratorConfig,
-    private val actorScope: CoroutineScope,
-    private val childScope: CoroutineScope,
-    private val ownsChildScope: Boolean,
-) : Actor<PipelineOrchestrator.Command>(
-        scope = actorScope,
-        actorName = "pipekt-orchestrator",
-    ) {
-    companion object {
-        suspend fun spawn(
-            store: DurableStore,
-            serializer: PayloadSerializer,
-            config: OrchestratorConfig = OrchestratorConfig(),
-            externalScope: CoroutineScope? = null,
-        ): PipelineOrchestratorRef {
-            val actorScope =
-                externalScope
-                    ?: CoroutineScope(
-                        SupervisorJob() + Dispatchers.Default + CoroutineName("pipekt-orchestrator-scope"),
-                    )
-            val ownsChildScope = externalScope == null
-            val childScope =
-                if (externalScope != null) {
-                    externalScope
-                } else {
-                    CoroutineScope(
-                        SupervisorJob() + Dispatchers.Default + CoroutineName("pipekt-orchestrator-children"),
-                    )
-                }
-
-            val actor =
-                PipelineOrchestrator(
-                    store = store,
-                    serializer = serializer,
-                    config = config,
-                    actorScope = actorScope,
-                    childScope = childScope,
-                    ownsChildScope = ownsChildScope,
-                )
-
-            actor.awaitStarted()
-            return PipelineOrchestratorRef(actor)
-        }
-    }
-
-    private val runtimeByPipeline = mutableMapOf<String, RuntimeRef>()
-    private var watchdog: Job? = null
-
-    override suspend fun postStart() {
-        watchdog =
-            childScope.launch(CoroutineName("pipekt-orchestrator-watchdog")) {
-                while (isActive) {
-                    delay(config.watchdogInterval)
-                    store.reclaimExpiredLeases(
-                        now = Clock.System.now(),
-                        limit = config.reclaimLimit,
-                    )
-                }
-            }
-    }
-
-    override suspend fun preStop() {
-        watchdog?.cancel()
-        watchdog?.join()
-        watchdog = null
-
-        val active = runtimeByPipeline.values.toList()
-        runtimeByPipeline.clear()
-        for (runtime in active) {
-            runtime.shutdown()
-        }
-
-        if (ownsChildScope) {
-            childScope.cancel()
-        }
-    }
-
-    override suspend fun handle(command: Command) {
-        when (command) {
-            is Command.StartPipeline -> onStartPipeline(command)
-            is Command.StopPipelineByName -> onStopPipelineByName(command)
-            is Command.ListPipelines -> command.reply.complete(runtimeByPipeline.keys.toSet())
-        }
-    }
-
-    override suspend fun onUnhandledCommandFailure(
-        command: Command,
-        cause: Throwable,
-    ) {
-        when (command) {
-            is Command.StartPipeline -> command.reply.completeExceptionally(cause)
-            is Command.StopPipelineByName -> command.reply.completeExceptionally(cause)
-            is Command.ListPipelines -> command.reply.completeExceptionally(cause)
-        }
-    }
-
-    suspend fun startPipelineInternal(
-        definition: PipelineDefinition,
-        planVersion: String,
-        config: RuntimeConfig = RuntimeConfig(),
-    ): RuntimeRef =
-        request { reply ->
-            Command.StartPipeline(
-                definition = definition,
-                planVersion = planVersion,
-                config = config,
-                reply = reply,
-            )
-        }
-
-    suspend fun stopPipelineInternal(pipelineName: String) {
-        request { reply -> Command.StopPipelineByName(pipelineName, reply) }
-    }
-
-    suspend fun listPipelinesInternal(): Set<String> =
-        request { reply -> Command.ListPipelines(reply) }
-
-    suspend fun shutdownInternal(timeout: Duration? = null) {
-        shutdownGracefully(timeout)
-    }
-
-    private suspend fun onStartPipeline(command: Command.StartPipeline) {
-        val existing = runtimeByPipeline[command.definition.name]
-        if (existing != null) {
-            command.reply.complete(existing)
-            return
-        }
-
-        val runtime =
-            PipelineRuntimeV2.spawn(
-                pipeline = command.definition,
-                planVersion = command.planVersion,
-                deps =
-                    RuntimeDeps(
-                        store = store,
-                        serializer = serializer,
-                        scope = childScope,
-                    ),
-                config = command.config,
-            )
-
-        runtimeByPipeline[command.definition.name] = runtime
-        command.reply.complete(runtime)
-    }
-
-    private suspend fun onStopPipelineByName(command: Command.StopPipelineByName) {
-        val runtime = runtimeByPipeline.remove(command.pipelineName)
-        runtime?.shutdown()
-        command.reply.complete(Unit)
-    }
-
-    internal sealed interface Command {
-        data class StartPipeline(
-            val definition: PipelineDefinition,
-            val planVersion: String,
-            val config: RuntimeConfig,
-            val reply: CompletableDeferred<RuntimeRef>,
-        ) : Command
-
-        data class StopPipelineByName(
-            val pipelineName: String,
-            val reply: CompletableDeferred<Unit>,
-        ) : Command
-
-        data class ListPipelines(
-            val reply: CompletableDeferred<Set<String>>,
-        ) : Command
-    }
-}
+ActorRef<PipelineOrchestratorCommand>
 ```
 
-### 13.6 Notes
+External callers then use:
 
-- the watchdog is actor-specific and belongs in `postStart()` / `preStop()`
-- public callers still never send raw commands
-- orchestrator shutdown is not queued behind normal workload
-- the child scope is separate from the actor loop scope so shutdown does not self-cancel the actor
+```kotlin
+val orchestrator: ActorRef<PipelineOrchestratorCommand> = spawn { ... }
 
----
+orchestrator.tell(PipelineOrchestratorCommand.StopPipeline("orders"))
 
-## 14. Second worked example: `PipelineRuntimeV2`
-
-`PipelineRuntimeV2` should be migrated to the same model after the orchestrator.
-
-Required direction:
-
-- make constructor non-public
-- expose `spawn(...)`
-- remove public loop-boot `start()`
-- keep only domain operations through `RuntimeRef`
-
-Important distinction:
-
-- loop startup is infrastructure and belongs to `Actor`
-- starting a pipeline execution is a domain concern
-
-If `PipelineRuntimeV2` still keeps a domain `StartRuntime` command, that is acceptable, but it must be handled by an already-running actor.
-
-This section exists to show that the base `Actor` is not orchestrator-specific.
+val pipelines =
+    orchestrator.ask(5.seconds) { reply ->
+        PipelineOrchestratorCommand.ListPipelines(reply)
+    }.getOrThrow()
+```
 
 ---
 
-## 15. File-level implementation plan
+## 13. Tests
 
-### 15.1 Add
+The shared actor package currently has focused tests under:
 
-- `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/runtime/Actor.kt`
-- `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/runtime/ActorRef.kt`
+- `pipekt/src/commonTest/kotlin/io/github/fpaschos/pipekt/actor/ActorTest.kt`
+- `pipekt/src/commonTest/kotlin/io/github/fpaschos/pipekt/actor/MinimalActor.kt`
 
-### 15.2 Refactor
+Current coverage includes:
+
+- spawn waits for startup
+- repeated requests before shutdown
+- shutdown rejects later requests
+- idempotent concurrent shutdown
+- reply completion on command failure
+- shutdown during startup
+
+---
+
+## 14. File-level implementation status
+
+Implemented:
+
+- `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/actor/Actor.kt`
+- `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/actor/ActorRef.kt`
+- `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/actor/ReplyingCommand.kt`
+
+Consumers still to migrate:
 
 - `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/runtime/PipelineOrchestrator.kt`
 - `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/runtime/PipelineRuntimeV2.kt`
 - `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/runtime/Types.kt`
 - `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/runtime/PipelineDsl.kt`
 
-### 15.3 Type changes
-
-- add `PipelineOrchestratorRef`
-- make `RuntimeRef` extend `ActorRef` if its semantics remain "shut down this runtime"
-- move generic lifecycle helpers out of concrete actor files
-
 ---
 
-## 16. Implementation order
+## 15. Acceptance criteria
 
-1. Add `ActorRef.kt`.
-2. Add `Actor.kt` with startup barrier, bounded mailbox behavior, and graceful or forced shutdown.
-3. Refactor `PipelineOrchestrator` to extend `Actor`.
-4. Introduce `PipelineOrchestratorRef` and move external API surface there.
-5. Remove public orchestrator `start()`.
-6. Unify orchestrator state around `runtimeByPipeline`.
-7. Move watchdog startup and cleanup into actor hooks.
-8. Update DSL helper to work with the orchestrator ref or orchestrator scope.
-9. Refactor `PipelineRuntimeV2` onto the same actor model.
-10. Update tests to construct actors only through `spawn(...)`.
-
----
-
-## 17. Acceptance criteria
-
-- No actor in `pipekt.runtime` requires a public "boot the loop" `start()` method.
-- No actor stores a nullable loop job purely for one-time startup.
-- No actor uses a startup `Mutex` solely to guarantee the loop starts once.
-- Any actor-specific side job is started and stopped through lifecycle hooks rather than `init`.
+- No actor requires a public “boot the loop” `start()` method.
+- Startup is acknowledged via `awaitStarted()`.
+- Shutdown is single-flight and explicit.
 - Mailbox behavior is bounded and explicit.
-- Startup failure is visible to `spawn(...)`.
-- Shutdown is idempotent and single-flight.
-- Actor shutdown is not blocked behind arbitrary mailbox backlog as a normal queued command.
-- Public shutdown waits for actor termination before returning.
-- Public callers interact only through typed refs.
-- Public callers never use generic ask or tell.
-
----
-
-## 18. Open decisions
-
-- whether `ActorMailboxFullException` and `ActorMailboxClosedException` should remain internal or become public runtime exceptions
-- whether mailbox capacity should default to `Channel.BUFFERED` everywhere or require explicit sizing per actor
-- whether `PipelineRuntimeV2` should keep a domain `StartRuntime` command or collapse startup fully into `spawn(...)`
-
-Current recommendation:
-
-- keep actor exceptions internal first
-- keep timeout optional on `shutdown(...)`
-- migrate `PipelineRuntimeV2` in a second step after orchestrator refactor lands cleanly
+- Public callers interact only through `ActorRef<Command>`.
+- `tell(...)` and `ask(...)` are universal across actors.
+- `tell(...)` returns `Result<Unit>`.
+- `ask(...)` returns `Result<Reply>` and always requires a timeout.
+- Public failures are compressed to unavailable / timeout / command-failed.
+- No per-concrete actor ref type is required by the core model.
+- No actor system or actor context is required by the core model.
+- Reply-bearing command failures do not leave requesters suspended forever when commands opt into `ReplyingCommand`.
