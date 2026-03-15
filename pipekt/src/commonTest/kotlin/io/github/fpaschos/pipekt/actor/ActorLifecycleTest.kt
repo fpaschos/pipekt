@@ -2,7 +2,6 @@ package io.github.fpaschos.pipekt.actor
 
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactly
-import io.kotest.matchers.result.shouldBeFailure
 import io.kotest.matchers.result.shouldBeSuccess
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
@@ -12,7 +11,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
-import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 
@@ -20,33 +19,36 @@ import kotlinx.coroutines.test.runTest
 class ActorLifecycleTest :
     FunSpec({
         test("spawn waits for postStart before publishing the ref") {
-            runTest(StandardTestDispatcher()) {
-                val scope = CoroutineScope(coroutineContext + SupervisorJob())
+            runTest {
                 val startupGate = CompletableDeferred<Unit>()
+                val refDeferred = CompletableDeferred<ActorRef<TestCommand>>()
 
-                val spawnDeferred =
-                    async {
-                        spawn {
-                            MinimalActor(
-                                scope = scope,
-                                name = "startup-actor",
-                                startupGate = startupGate,
-                            )
-                        }
+                val owner =
+                    backgroundScope.launch {
+                        refDeferred.complete(
+                            spawn("startup-actor") { scope, name ->
+                                MinimalActor(
+                                    scope = scope,
+                                    name = name,
+                                    startupGate = startupGate,
+                                )
+                            },
+                        )
                     }
 
                 advanceUntilIdle()
-                spawnDeferred.isCompleted shouldBe false
+                refDeferred.isCompleted shouldBe false
 
                 startupGate.complete(Unit)
-                val ref = spawnDeferred.await()
+                val ref = refDeferred.await()
                 ref.tell(TestCommand.Record("ready")).shouldBeSuccess(Unit)
                 ref.shutdown()
+                owner.join()
             }
         }
 
         test("shutdown during startup fails startup cleanly") {
-            runTest(StandardTestDispatcher()) {
+            runTest {
                 val scope = CoroutineScope(coroutineContext + SupervisorJob())
                 val startupGate = CompletableDeferred<Unit>()
                 val actor = MinimalActor(scope, "shutdown-during-startup", startupGate = startupGate)
@@ -65,10 +67,9 @@ class ActorLifecycleTest :
         }
 
         test("startup and shutdown hooks run in sequence") {
-            runTest(StandardTestDispatcher()) {
-                val scope = CoroutineScope(coroutineContext + SupervisorJob())
+            runTest {
                 val events = mutableListOf<String>()
-                val ref = spawn { MinimalActor(scope, "lifecycle-actor", events = events) }
+                val ref = spawn("lifecycle-actor") { scope, name -> MinimalActor(scope, name, events = events) }
 
                 ref.tell(TestCommand.Record("x")).shouldBeSuccess(Unit)
                 advanceUntilIdle()
@@ -85,13 +86,11 @@ class ActorLifecycleTest :
         }
 
         test("startup failure does not publish a half-started ref") {
-            runTest(StandardTestDispatcher()) {
-                val scope = CoroutineScope(coroutineContext + SupervisorJob())
-
+            runTest {
                 val failure =
                     runCatching {
-                        spawn {
-                            FailingStartActor(scope, "failing-start", IllegalStateException("startup-boom"))
+                        spawn("failing-start") { scope, name ->
+                            FailingStartActor(scope, name, IllegalStateException("startup-boom"))
                         }
                     }.exceptionOrNull()
 

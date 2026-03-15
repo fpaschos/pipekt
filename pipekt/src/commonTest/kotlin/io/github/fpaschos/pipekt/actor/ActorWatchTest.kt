@@ -3,10 +3,7 @@ package io.github.fpaschos.pipekt.actor
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.string.shouldContain
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlin.time.Duration.Companion.seconds
@@ -15,10 +12,9 @@ import kotlin.time.Duration.Companion.seconds
 class ActorWatchTest :
     FunSpec({
         test("watched child normal termination emits one parent self-message") {
-            runTest(StandardTestDispatcher()) {
-                val scope = CoroutineScope(coroutineContext + SupervisorJob())
+            runTest {
                 val events = mutableListOf<String>()
-                val ref = spawn { ParentActor(scope, "watch-parent", events) }
+                val ref = spawn("watch-parent") { scope, name -> ParentActor(scope, name, events) }
 
                 ref.ask(1.seconds) { replyTo -> ParentCommand.StopChild(replyTo) }.getOrThrow()
                 advanceUntilIdle()
@@ -32,10 +28,9 @@ class ActorWatchTest :
         }
 
         test("watched child failure emits one parent self-message with the cause") {
-            runTest(StandardTestDispatcher()) {
-                val scope = CoroutineScope(coroutineContext + SupervisorJob())
+            runTest {
                 val events = mutableListOf<String>()
-                val ref = spawn { ParentActor(scope, "watch-failure-parent", events) }
+                val ref = spawn("watch-failure-parent") { scope, name -> ParentActor(scope, name, events) }
 
                 ref.ask(1.seconds) { replyTo -> ParentCommand.FailChild(replyTo) }.getOrThrow()
                 advanceUntilIdle()

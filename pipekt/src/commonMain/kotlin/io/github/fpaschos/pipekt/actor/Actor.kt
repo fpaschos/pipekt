@@ -6,15 +6,17 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration
 
 /**
@@ -149,6 +151,7 @@ abstract class Actor<Command : Any>(
                 } finally {
                     // Shutdown callers and tests can now observe completion.
                     terminated.complete(Unit)
+                    cancelOwnedScope()
                 }
             }
         }
@@ -302,6 +305,7 @@ abstract class Actor<Command : Any>(
 
         if (!shouldStop) {
             terminated.await()
+            cancelOwnedScope()
             return
         }
 
@@ -320,6 +324,7 @@ abstract class Actor<Command : Any>(
         if (!gracefully) {
             // Immediate shutdown skips graceful waiting entirely.
             forceShutdown()
+            cancelOwnedScope()
             return
         }
 
@@ -332,6 +337,7 @@ abstract class Actor<Command : Any>(
             preStop()
             shutdownOwnedChildren()
             terminated.await()
+            cancelOwnedScope()
             return
         }
 
@@ -348,6 +354,7 @@ abstract class Actor<Command : Any>(
             // Graceful shutdown exceeded the timeout. Escalate to hard cancellation.
             forceShutdown()
         }
+        cancelOwnedScope()
     }
 
     private fun failPendingCommands() {
@@ -365,11 +372,10 @@ abstract class Actor<Command : Any>(
     protected suspend fun <ChildCommand : Any> spawnChild(
         name: String,
         dispatcher: CoroutineDispatcher? = null,
-        supervisor: Boolean = true,
         onTerminated: ((ChildTermination) -> Command)? = null,
         factory: (CoroutineScope, String) -> Actor<ChildCommand>,
     ): ActorRef<ChildCommand> {
-        val preparedScope = createActorScope(childScope, name, dispatcher, supervisor)
+        val preparedScope = createActorScope(childScope, name, dispatcher)
         val child = factory(preparedScope, name)
         child.awaitStarted()
         registerOwnedChild(child, onTerminated)
@@ -402,11 +408,17 @@ abstract class Actor<Command : Any>(
         }
         children += owned
         child.loopJob.invokeOnCompletion { cause ->
+            val normalizedCause =
+                when {
+                    child.terminalCause.value != null -> child.terminalCause.value
+                    cause is CancellationException && child.lifecycle.value == ActorLifecycle.SHUTDOWN -> null
+                    else -> cause
+                }
             val termination =
                 ChildTermination(
                     childName = child.self().name,
                     childLabel = child.self().label,
-                    cause = child.terminalCause.value ?: cause,
+                    cause = normalizedCause,
                 )
             owned.watchers.forEach { watcherFn ->
                 self().tell(watcherFn(termination))
@@ -421,6 +433,12 @@ abstract class Actor<Command : Any>(
         }
         childScope.coroutineContext.job.cancel()
     }
+
+    private fun cancelOwnedScope() {
+        if (scope.coroutineContext[OwnedActorScope.Key] != null) {
+            scope.coroutineContext.job.cancel()
+        }
+    }
 }
 
 data class ChildTermination(
@@ -434,6 +452,11 @@ private data class ActorChild<ParentCommand : Any>(
     val watchers: MutableList<(ChildTermination) -> ParentCommand>,
 )
 
+private data object OwnedActorScope :
+    AbstractCoroutineContextElement(Key) {
+    object Key : CoroutineContext.Key<OwnedActorScope>
+}
+
 private fun ReplyRequest<*>.failRequest(cause: Throwable) {
     @Suppress("UNCHECKED_CAST")
     (replyTo as ReplyChannel<Any?>).failure(cause)
@@ -441,40 +464,29 @@ private fun ReplyRequest<*>.failRequest(cause: Throwable) {
 
 private fun createActorScope(
     parentScope: CoroutineScope,
-    actorName: String,
+    name: String,
     dispatcher: CoroutineDispatcher?,
-    supervisor: Boolean,
 ): CoroutineScope {
     val parentContext = parentScope.coroutineContext
-    val childJob = if (supervisor) SupervisorJob(parentContext[Job]) else Job(parentContext[Job])
-    var scopeContext = parentContext + childJob + CoroutineName(actorName)
+    val childJob = SupervisorJob(parentContext[Job])
+    var scopeContext = parentContext + childJob + CoroutineName(name) + OwnedActorScope
     if (dispatcher != null) {
-        scopeContext = scopeContext + dispatcher
+        scopeContext += dispatcher
     }
     return CoroutineScope(scopeContext)
 }
 
 /**
- * Starts an actor, waits for startup to complete, and returns its typed ref.
- */
-suspend fun <Command : Any> spawn(factory: () -> Actor<Command>): ActorRef<Command> {
-    val actor = factory()
-    actor.awaitStarted()
-    return actor.self()
-}
-
-/**
- * Starts an actor in a scope derived from [parentScope], waits for startup to complete, and
- * returns its typed ref.
+ * Starts an actor in a scope derived from the current coroutine context, waits for startup to
+ * complete, and returns its typed ref.
  */
 suspend fun <Command : Any> spawn(
-    parentScope: CoroutineScope,
     name: String,
     dispatcher: CoroutineDispatcher? = null,
-    supervisor: Boolean = true,
     factory: (CoroutineScope, String) -> Actor<Command>,
 ): ActorRef<Command> {
-    val scope = createActorScope(parentScope, name, dispatcher, supervisor)
+    val parentScope = CoroutineScope(currentCoroutineContext())
+    val scope = createActorScope(parentScope, name, dispatcher)
     val actor = factory(scope, name)
     actor.awaitStarted()
     return actor.self()

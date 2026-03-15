@@ -910,57 +910,61 @@ The library should expose a universal generic `spawn(...)` function.
 
 ```kotlin
 suspend fun <Command : Any> spawn(
-    factory: () -> Actor<Command>,
-): ActorRef<Command> {
-    val actor = factory()
-    actor.awaitStarted()
-    return actor.self()
-}
+    name: String,
+    dispatcher: CoroutineDispatcher? = null,
+    factory: (CoroutineScope, String) -> Actor<Command>,
+): ActorRef<Command>
 ```
 
-Rules:
+Reference behavior:
 
-- `spawn(...)` should be `suspend`
+- `spawn(...)` is `suspend`
+- `spawn(...)` captures the current coroutine context as the parent context
+- actor scope construction stays internal; callers do not pass a `CoroutineScope`
+- actor scope creation always uses a supervised child job
+- the inherited dispatcher is preserved unless an explicit dispatcher override is provided
 - `spawn(...)` must not return before startup succeeds
 - callers never invoke a separate public loop-boot `start()`
 - outsiders start actors through `spawn(...)`, not via public constructors
 - actor constructors should remain `private` or `internal`
 - concrete actors may still offer companion helpers, but those helpers should delegate to the generic `spawn(...)`
 
-### 11.1 Scope inheritance and spawn ergonomics
-
-The current minimal `spawn(factory)` is sufficient for correctness, but it is not yet the best
-ergonomic API for real actor trees.
-
-Problems to solve:
-
-- callers currently have to assemble actor scopes manually
-- actor naming and scope naming are not aligned automatically
-- child actors need a clear default parent/child ownership model
-- overriding only the dispatcher should be easy without replacing the whole context
-
-Recommended follow-up API shape:
+Reference implementation shape:
 
 ```kotlin
 suspend fun <Command : Any> spawn(
-    parentScope: CoroutineScope,
     name: String,
     dispatcher: CoroutineDispatcher? = null,
-    supervisor: Boolean = true,
     factory: (CoroutineScope, String) -> Actor<Command>,
-): ActorRef<Command>
+): ActorRef<Command> {
+    val parentScope = CoroutineScope(currentCoroutineContext())
+    val scope = createActorScope(parentScope, name, dispatcher)
+    val actor = factory(scope, name)
+    actor.awaitStarted()
+    return actor.self()
+}
 ```
 
-Behavioral rules for this overload:
+This is now the canonical public spawn API.
 
-- inherit the parent coroutine context by default
-- create a child job rather than reusing the exact parent job object
-- preserve the inherited dispatcher unless an explicit dispatcher override is provided
-- install actor naming automatically so coroutine names align with `label` where possible
-- allow concrete actors to accept the prepared scope rather than requiring every caller to build it manually
+### 11.1 Scope inheritance and convenience model
 
-This preserves the current simple `spawn(factory)` shape as a low-level primitive while providing
-an ergonomic default for production actor usage.
+The convenience model is intentionally opinionated.
+
+Rules:
+
+- callers should not assemble actor scopes manually for normal actor creation
+- the ambient coroutine becomes the ownership boundary for the actor
+- overriding only the dispatcher is the public execution-policy knob
+- supervision policy is internal and fixed to supervised child scopes
+- if code needs direct access to the concrete actor instance rather than an `ActorRef`, it may still construct the actor directly in tests or internal infrastructure
+
+Rationale:
+
+- this keeps top-level actor construction Kotlin-idiomatic in suspend code
+- it hides `SupervisorJob(...)` and scope assembly from callers
+- it preserves deterministic `runTest` scheduling because the current coroutine context is inherited automatically
+- it keeps ownership explicit enough for structured concurrency without introducing an actor system object
 
 ### 11.2 Internal scope model
 
@@ -972,9 +976,36 @@ Actors that own side jobs or child actors should distinguish between two interna
 Rules:
 
 - `actorScope` termination ends the actor loop
-- `childScope` is derived from the actor's parent context and is cancelled during actor shutdown
+- `childScope` is derived from the actor's context and is cancelled during actor shutdown
 - actor-owned watchdogs, pollers, and child actors should use `childScope`
 - child cleanup must not cancel the actor loop out from under itself
+- actor-owned scopes created internally by `spawn(...)` must be cancelled when the actor terminates, including crash paths, so test and parent coroutine trees do not leak jobs
+
+### 11.3 Observations from implementation
+
+The current implementation surfaced a few practical rules that should remain documented:
+
+- normal actor shutdown and actor crash paths both need to cancel the internally owned actor scope job
+- child watch notifications should treat post-stop cancellation as normal termination when the child has already reached `SHUTDOWN`
+- tests that only need an `ActorRef` should use `spawn(name) { scope, name -> ... }`
+- tests that need `awaitStarted()`, `awaitTerminated()`, or other concrete actor internals may still instantiate the actor directly
+
+Example convenience usage:
+
+```kotlin
+val ref =
+    spawn("pipeline-orchestrator") { scope, name ->
+        PipelineOrchestratorActor(scope, name, deps)
+    }
+```
+
+Example direct construction for infrastructure-only tests:
+
+```kotlin
+val actor = MinimalActor(scope, "shutdown-during-startup", startupGate = startupGate)
+val shutdown = async { actor.self().shutdown() }
+val startupFailure = async { runCatching { actor.awaitStarted() } }
+```
 
 This model is especially important for orchestrator-style actors.
 

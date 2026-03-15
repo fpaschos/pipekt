@@ -7,11 +7,8 @@ import io.kotest.matchers.result.shouldBeSuccess
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -23,9 +20,8 @@ import kotlin.time.Duration.Companion.seconds
 class ActorMailboxTest :
     FunSpec({
         test("many one-way messages are processed in mailbox order") {
-            runTest(StandardTestDispatcher()) {
-                val scope = CoroutineScope(coroutineContext + SupervisorJob())
-                val ref = spawn { MinimalActor(scope, "mailbox-order-actor") }
+            runTest {
+                val ref = spawn("mailbox-order-actor") { scope, name -> MinimalActor(scope, name) }
 
                 (1..20).forEach { index ->
                     ref.tell(TestCommand.Record("v$index")).shouldBeSuccess(Unit)
@@ -42,9 +38,8 @@ class ActorMailboxTest :
         }
 
         test("many ask messages complete correctly under load") {
-            runTest(StandardTestDispatcher()) {
-                val scope = CoroutineScope(coroutineContext + SupervisorJob())
-                val ref = spawn { MinimalActor(scope, "mailbox-ask-actor") }
+            runTest {
+                val ref = spawn("mailbox-ask-actor") { scope, name -> MinimalActor(scope, name) }
 
                 val replies =
                     (1..20)
@@ -58,9 +53,8 @@ class ActorMailboxTest :
         }
 
         test("queued requests fail as not delivered when an earlier command crashes") {
-            runTest(StandardTestDispatcher()) {
-                val scope = CoroutineScope(coroutineContext + SupervisorJob())
-                val ref = spawn { MinimalActor(scope, "crash-actor") }
+            runTest {
+                val ref = spawn("crash-actor") { scope, name -> MinimalActor(scope, name) }
 
                 val failureAsk = async { ref.ask(1.seconds) { replyTo -> TestCommand.Fail(replyTo) } }
                 val pendingAsk = async { ref.ask(1.seconds) { replyTo -> TestCommand.Ping("after", replyTo) } }
@@ -74,10 +68,9 @@ class ActorMailboxTest :
         }
 
         test("forced shutdown drains pending requests as not delivered") {
-            runTest(StandardTestDispatcher()) {
-                val scope = CoroutineScope(coroutineContext + SupervisorJob())
+            runTest {
                 val gate = CompletableDeferred<Unit>()
-                val ref = spawn { MinimalActor(scope, "forced-shutdown-actor") }
+                val ref = spawn("forced-shutdown-actor") { scope, name -> MinimalActor(scope, name) }
 
                 ref.tell(TestCommand.Block(gate)).shouldBeSuccess(Unit)
                 val pendingAsk = async { ref.ask(10.seconds) { replyTo -> TestCommand.Ping("queued", replyTo) } }
@@ -97,10 +90,9 @@ class ActorMailboxTest :
         }
 
         test("undelivered one-way commands are reported through the hook") {
-            runTest(StandardTestDispatcher()) {
-                val scope = CoroutineScope(coroutineContext + SupervisorJob())
+            runTest {
                 val undelivered = mutableListOf<String>()
-                val ref = spawn { RecordingActor(scope, "recording-actor", undelivered) }
+                val ref = spawn("recording-actor") { scope, name -> RecordingActor(scope, name, undelivered) }
 
                 ref.tell(TestCommand.Fail(deferredReplyChannel())).shouldBeSuccess(Unit)
                 ref.tell(TestCommand.Record("dropped")).shouldBeSuccess(Unit)

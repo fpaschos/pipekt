@@ -6,10 +6,7 @@ import io.kotest.matchers.result.shouldBeFailure
 import io.kotest.matchers.result.shouldBeSuccess
 import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlin.time.Duration.Companion.milliseconds
@@ -19,9 +16,8 @@ import kotlin.time.Duration.Companion.seconds
 class ActorRequestReplyTest :
     FunSpec({
         test("typed refs support tell and ask through the shared reply channel") {
-            runTest(StandardTestDispatcher()) {
-                val scope = CoroutineScope(coroutineContext + SupervisorJob())
-                val ref = spawn { MinimalActor(scope, "tell-ask-actor") }
+            runTest {
+                val ref = spawn("tell-ask-actor") { scope, name -> MinimalActor(scope, name) }
 
                 ref.tell(TestCommand.Record("a")).shouldBeSuccess(Unit)
                 ref.tell(TestCommand.Record("b")).shouldBeSuccess(Unit)
@@ -38,9 +34,8 @@ class ActorRequestReplyTest :
         }
 
         test("handler exceptions surface as command failures") {
-            runTest(StandardTestDispatcher()) {
-                val scope = CoroutineScope(coroutineContext + SupervisorJob())
-                val ref = spawn { MinimalActor(scope, "failure-actor") }
+            runTest {
+                val ref = spawn("failure-actor") { scope, name -> MinimalActor(scope, name) }
 
                 val failure = ref.ask(1.seconds) { replyTo -> TestCommand.Fail(replyTo) }.shouldBeFailure()
                 failure.shouldBeInstanceOf<ActorCommandFailed>()
@@ -48,10 +43,9 @@ class ActorRequestReplyTest :
         }
 
         test("ask timeouts return ActorAskTimeoutException") {
-            runTest(StandardTestDispatcher()) {
-                val scope = CoroutineScope(coroutineContext + SupervisorJob())
+            runTest {
                 val gate = CompletableDeferred<Unit>()
-                val ref = spawn { MinimalActor(scope, "timeout-actor") }
+                val ref = spawn("timeout-actor") { scope, name -> MinimalActor(scope, name) }
 
                 val failure =
                     ref

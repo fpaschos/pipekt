@@ -4,10 +4,7 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.result.shouldBeSuccess
 import io.kotest.matchers.shouldBe
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlin.time.Duration.Companion.seconds
@@ -16,10 +13,12 @@ import kotlin.time.Duration.Companion.seconds
 class ActorChildOwnershipTest :
     FunSpec({
         test("parent shutdown stops owned children before termination completes") {
-            runTest(StandardTestDispatcher()) {
-                val scope = CoroutineScope(coroutineContext + SupervisorJob())
+            runTest {
                 val events = mutableListOf<String>()
-                val ref = spawn { ParentActor(scope, "parent-actor", events) }
+                val ref =
+                    spawn("parent-actor") { scope, name ->
+                        ParentActor(scope, name, events)
+                    }
 
                 ref.shutdown()
                 advanceUntilIdle()
@@ -29,10 +28,12 @@ class ActorChildOwnershipTest :
         }
 
         test("child failure does not automatically crash the parent") {
-            runTest(StandardTestDispatcher()) {
-                val scope = CoroutineScope(coroutineContext + SupervisorJob())
+            runTest {
                 val events = mutableListOf<String>()
-                val ref = spawn { ParentActor(scope, "parent-survives-child", events) }
+                val ref =
+                    spawn("parent-survives-child") { scope, name ->
+                        ParentActor(scope, name, events)
+                    }
 
                 ref.ask(1.seconds) { replyTo -> ParentCommand.FailChild(replyTo) }.shouldBeSuccess(Unit)
                 advanceUntilIdle()
