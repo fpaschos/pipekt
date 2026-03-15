@@ -2,9 +2,18 @@ package io.github.fpaschos.pipekt.actor
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineName
-import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.channels.Channel
-import kotlin.coroutines.coroutineContext
+
+class EventRecorder {
+    private val events = mutableListOf<String>()
+
+    fun record(event: String) {
+        events += event
+    }
+
+    fun snapshot(): List<String> = events.toList()
+}
 
 sealed interface TestCommand {
     data class Record(
@@ -45,75 +54,73 @@ sealed interface TestCommand {
 }
 
 class MinimalActor(
-    scope: CoroutineScope,
-    name: String,
-    private val events: MutableList<String> = mutableListOf(),
+    ctx: ActorContext<TestCommand>,
+    private val events: EventRecorder = EventRecorder(),
     private val startupGate: CompletableDeferred<Unit>? = null,
     capacity: Int = Channel.BUFFERED,
-) : Actor<TestCommand>(scope, name, capacity) {
+) : Actor<TestCommand>(ctx, capacity) {
     private val recorded = mutableListOf<String>()
 
     override suspend fun postStart() {
-        events.add("postStart:begin")
+        events.record("postStart:begin")
         startupGate?.await()
-        events.add("postStart:end")
+        events.record("postStart:end")
     }
 
     override suspend fun handle(command: TestCommand) {
         when (command) {
             is TestCommand.Record -> {
                 recorded += command.value
-                events.add("handle:record:${command.value}")
+                events.record("handle:record:${command.value}")
             }
 
             is TestCommand.Ping -> {
-                events.add("handle:ping:${command.value}")
+                events.record("handle:ping:${command.value}")
                 command.success("echo: ${command.value}")
             }
 
             is TestCommand.Snapshot -> {
-                events.add("handle:snapshot")
+                events.record("handle:snapshot")
                 command.success(recorded.toList())
             }
 
             is TestCommand.Fail -> {
-                events.add("handle:fail")
+                events.record("handle:fail")
                 error("boom")
             }
 
             is TestCommand.SlowPing -> {
-                events.add("handle:slow-ping:${command.value}:begin")
+                events.record("handle:slow-ping:${command.value}:begin")
                 command.gate.await()
-                events.add("handle:slow-ping:${command.value}:end")
+                events.record("handle:slow-ping:${command.value}:end")
                 command.success("echo: ${command.value}")
             }
 
             is TestCommand.Block -> {
-                events.add("handle:block:begin")
+                events.record("handle:block:begin")
                 command.gate.await()
-                events.add("handle:block:end")
+                events.record("handle:block:end")
             }
 
             is TestCommand.LoopName -> {
-                command.success(coroutineContext[CoroutineName]?.name)
+                command.success(currentCoroutineContext()[CoroutineName]?.name)
             }
         }
     }
 
     override suspend fun preStop() {
-        events.add("preStop")
+        events.record("preStop")
     }
 
     override suspend fun postStop() {
-        events.add("postStop")
+        events.record("postStop")
     }
 }
 
 class RecordingActor(
-    scope: CoroutineScope,
-    name: String,
+    ctx: ActorContext<TestCommand>,
     private val undelivered: MutableList<String>,
-) : Actor<TestCommand>(scope, name, Channel.BUFFERED) {
+) : Actor<TestCommand>(ctx, Channel.BUFFERED) {
     override suspend fun handle(command: TestCommand) {
         when (command) {
             is TestCommand.Record -> Unit
@@ -146,10 +153,9 @@ class RecordingActor(
 }
 
 class FailingStartActor(
-    scope: CoroutineScope,
-    name: String,
+    ctx: ActorContext<TestCommand>,
     private val startupFailure: Throwable,
-) : Actor<TestCommand>(scope, name, Channel.BUFFERED) {
+) : Actor<TestCommand>(ctx, Channel.BUFFERED) {
     override suspend fun postStart(): Unit = throw startupFailure
 
     override suspend fun handle(command: TestCommand) = Unit
@@ -187,43 +193,39 @@ sealed interface ParentCommand {
 }
 
 class ChildActor(
-    scope: CoroutineScope,
-    name: String,
-    private val events: MutableList<String>,
-) : Actor<ChildCommand>(scope, name, Channel.BUFFERED) {
+    ctx: ActorContext<ChildCommand>,
+    private val events: EventRecorder,
+) : Actor<ChildCommand>(ctx, Channel.BUFFERED) {
     override suspend fun handle(command: ChildCommand) {
         when (command) {
             ChildCommand.Fail -> error("child-boom")
-            ChildCommand.Capture -> events += "child:capture"
+            ChildCommand.Capture -> events.record("child:capture")
         }
     }
 
     override suspend fun postStop() {
-        events += "child:postStop"
+        events.record("child:postStop")
     }
 }
 
 class ParentActor(
-    scope: CoroutineScope,
-    name: String,
-    private val events: MutableList<String>,
-) : Actor<ParentCommand>(scope, name, Channel.BUFFERED) {
+    ctx: ActorContext<ParentCommand>,
+    private val events: EventRecorder,
+) : Actor<ParentCommand>(ctx, Channel.BUFFERED) {
     private lateinit var child: ActorRef<ChildCommand>
 
     override suspend fun postStart() {
         child =
-            spawnChild(
-                name = "owned-child",
-                onTerminated = { ParentCommand.ChildObserved(it) },
-            ) { childScope, childName ->
-                ChildActor(childScope, childName, events)
+            ctx.spawn(name = "owned-child") { childCtx ->
+                ChildActor(childCtx, events)
             }
+        ctx.watch(child) { ParentCommand.ChildObserved(it) }
     }
 
     override suspend fun handle(command: ParentCommand) {
         when (command) {
             is ParentCommand.SnapshotEvents -> {
-                command.success(events.toList())
+                command.success(events.snapshot())
             }
 
             is ParentCommand.StopChild -> {
@@ -238,11 +240,11 @@ class ParentActor(
 
             is ParentCommand.ChildObserved -> {
                 val causeName = command.termination.cause?.message ?: "normal"
-                events += "parent:child-terminated:${command.termination.childLabel}:$causeName"
+                events.record("parent:child-terminated:${command.termination.childLabel}:$causeName")
             }
 
             is ParentCommand.ChildCaptured -> {
-                events += "parent:captured:${command.value}"
+                events.record("parent:captured:${command.value}")
             }
         }
     }

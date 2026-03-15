@@ -34,7 +34,7 @@ internal enum class ActorLifecycle {
     SHUTDOWN,
 }
 
-private val nextActorInstanceId = atomic(0L)
+internal val nextActorInstanceId = atomic(0L)
 
 /**
  * Base actor infrastructure: mailbox, loop job, startup/termination barriers, lifecycle,
@@ -51,12 +51,13 @@ private val nextActorInstanceId = atomic(0L)
  * @param capacity Mailbox channel capacity; default is [Channel.BUFFERED].
  */
 abstract class Actor<Command : Any>(
-    private val scope: CoroutineScope,
-    private val name: String,
+    protected val ctx: ActorContext<Command>,
     capacity: Int = Channel.BUFFERED,
 ) {
-    private val actorInstanceId = nextActorInstanceId.incrementAndGet()
-    private val label = "${this@Actor.name}#$actorInstanceId"
+    private val runtimeContext = ctx as InternalActorContext<Command>
+    private val scope = runtimeContext.scope
+    private val name = runtimeContext.name
+    private val label = runtimeContext.label
 
     /** Bounded mailbox for commands. */
     protected val mailbox = Channel<Command>(capacity)
@@ -68,17 +69,7 @@ abstract class Actor<Command : Any>(
     private val lifecycle = atomic(ActorLifecycle.STARTING)
     private val terminalCause = atomic<Throwable?>(null)
     private val children = mutableListOf<ActorChild<Command>>()
-    private val childScope =
-        CoroutineScope(
-            scope.coroutineContext +
-                SupervisorJob(scope.coroutineContext[Job]) +
-                CoroutineName("${this@Actor.label}/children"),
-        )
-
-    /** Typed ref used by outsiders and peer actors to interact with this actor. */
-    fun self(): ActorRef<Command> = actorRef
-
-    private val actorRef =
+    internal val actorRef: ActorRef<Command> =
         object : ActorRef<Command> {
             override val name: String
                 get() = this@Actor.name
@@ -92,6 +83,16 @@ abstract class Actor<Command : Any>(
                 this@Actor.shutdown(timeout = timeout)
             }
         }
+    private val childScope =
+        CoroutineScope(
+            scope.coroutineContext +
+                SupervisorJob(scope.coroutineContext[Job]) +
+                CoroutineName("${this@Actor.label}/children"),
+        )
+
+    init {
+        runtimeContext.bind(this)
+    }
 
     private val loopJob: Job =
         scope.launch(CoroutineName(this@Actor.label)) {
@@ -369,28 +370,29 @@ abstract class Actor<Command : Any>(
      * during parent shutdown. If [onTerminated] is provided, child termination is converted into a
      * parent self-message.
      */
-    protected suspend fun <ChildCommand : Any> spawnChild(
+    internal suspend fun <ChildCommand : Any> spawnOwnedChild(
         name: String,
         dispatcher: CoroutineDispatcher? = null,
         onTerminated: ((ChildTermination) -> Command)? = null,
-        factory: (CoroutineScope, String) -> Actor<ChildCommand>,
+        factory: (ActorContext<ChildCommand>) -> Actor<ChildCommand>,
     ): ActorRef<ChildCommand> {
         val preparedScope = createActorScope(childScope, name, dispatcher)
-        val child = factory(preparedScope, name)
+        val childContext = createActorContext<ChildCommand>(preparedScope, name)
+        val child = factory(childContext)
         child.awaitStarted()
         registerOwnedChild(child, onTerminated)
-        return child.self()
+        return childContext.self
     }
 
     /**
      * Observes a child previously created through [spawnChild]. Watch notifications are best
      * effort during shutdown: if the parent no longer accepts commands, the event is dropped.
      */
-    protected fun watch(
+    internal fun watchChild(
         child: ActorRef<*>,
         onTerminated: (ChildTermination) -> Command,
     ) {
-        val owned = children.firstOrNull { it.actor.self().label == child.label } ?: return
+        val owned = children.firstOrNull { it.actor.ctx.self.label == child.label } ?: return
         owned.watchers += onTerminated
     }
 
@@ -416,12 +418,12 @@ abstract class Actor<Command : Any>(
                 }
             val termination =
                 ChildTermination(
-                    childName = child.self().name,
-                    childLabel = child.self().label,
+                    childName = child.ctx.self.name,
+                    childLabel = child.ctx.self.label,
                     cause = normalizedCause,
                 )
             owned.watchers.forEach { watcherFn ->
-                self().tell(watcherFn(termination))
+                ctx.self.tell(watcherFn(termination))
             }
         }
     }
@@ -429,7 +431,7 @@ abstract class Actor<Command : Any>(
     private suspend fun shutdownOwnedChildren() {
         val children = children.toList()
         children.forEach { owned ->
-            owned.actor.self().shutdown()
+            owned.actor.ctx.self.shutdown()
         }
         childScope.coroutineContext.job.cancel()
     }
@@ -483,11 +485,12 @@ private fun createActorScope(
 suspend fun <Command : Any> spawn(
     name: String,
     dispatcher: CoroutineDispatcher? = null,
-    factory: (CoroutineScope, String) -> Actor<Command>,
+    factory: (ctx: ActorContext<Command>) -> Actor<Command>,
 ): ActorRef<Command> {
     val parentScope = CoroutineScope(currentCoroutineContext())
     val scope = createActorScope(parentScope, name, dispatcher)
-    val actor = factory(scope, name)
+    val ctx = createActorContext<Command>(scope, name)
+    val actor = factory(ctx)
     actor.awaitStarted()
-    return actor.self()
+    return ctx.self
 }

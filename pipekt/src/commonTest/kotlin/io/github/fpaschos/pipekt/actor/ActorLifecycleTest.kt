@@ -14,6 +14,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import kotlin.time.Duration.Companion.milliseconds
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ActorLifecycleTest :
@@ -26,10 +27,9 @@ class ActorLifecycleTest :
                 val owner =
                     backgroundScope.launch {
                         refDeferred.complete(
-                            spawn("startup-actor") { scope, name ->
+                            spawn("startup-actor") { ctx ->
                                 MinimalActor(
-                                    scope = scope,
-                                    name = name,
+                                    ctx = ctx,
                                     startupGate = startupGate,
                                 )
                             },
@@ -51,9 +51,10 @@ class ActorLifecycleTest :
             runTest {
                 val scope = CoroutineScope(coroutineContext + SupervisorJob())
                 val startupGate = CompletableDeferred<Unit>()
-                val actor = MinimalActor(scope, "shutdown-during-startup", startupGate = startupGate)
+                val ctx = createActorContext<TestCommand>(scope, "shutdown-during-startup")
+                val actor = MinimalActor(ctx, startupGate = startupGate)
 
-                val shutdown = async { actor.self().shutdown() }
+                val shutdown = async { ctx.self.shutdown() }
                 val startupFailure = async { runCatching { actor.awaitStarted() } }
 
                 advanceUntilIdle()
@@ -68,14 +69,14 @@ class ActorLifecycleTest :
 
         test("startup and shutdown hooks run in sequence") {
             runTest {
-                val events = mutableListOf<String>()
-                val ref = spawn("lifecycle-actor") { scope, name -> MinimalActor(scope, name, events = events) }
+                val events = EventRecorder()
+                val ref = spawn("lifecycle-actor") { ctx -> MinimalActor(ctx, events = events) }
 
                 ref.tell(TestCommand.Record("x")).shouldBeSuccess(Unit)
                 advanceUntilIdle()
                 ref.shutdown()
 
-                events.shouldContainExactly(
+                events.snapshot().shouldContainExactly(
                     "postStart:begin",
                     "postStart:end",
                     "handle:record:x",
@@ -89,12 +90,31 @@ class ActorLifecycleTest :
             runTest {
                 val failure =
                     runCatching {
-                        spawn("failing-start") { scope, name ->
-                            FailingStartActor(scope, name, IllegalStateException("startup-boom"))
+                        spawn("failing-start") { ctx ->
+                            FailingStartActor(ctx, IllegalStateException("startup-boom"))
                         }
                     }.exceptionOrNull()
 
                 failure.shouldBeInstanceOf<IllegalStateException>()
+            }
+        }
+
+        test("concurrent shutdown callers share the same termination path") {
+            runTest {
+                val gate = CompletableDeferred<Unit>()
+                val ref = spawn("concurrent-shutdown-actor") { ctx -> MinimalActor(ctx) }
+
+                ref.tell(TestCommand.Block(gate)).shouldBeSuccess(Unit)
+                advanceUntilIdle()
+
+                val first = async { ref.shutdown(50.milliseconds) }
+                val second = async { ref.shutdown(50.milliseconds) }
+
+                gate.complete(Unit)
+                advanceUntilIdle()
+
+                first.await()
+                second.await()
             }
         }
     })

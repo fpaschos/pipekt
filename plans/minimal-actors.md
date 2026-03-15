@@ -44,7 +44,6 @@ It does not introduce a general public actor framework. The shared actor package
 - No automatic actor restart.
 - No priority mailbox.
 - No actor system object.
-- No actor context object.
 - No public generic actor DSL.
 - No Akka-style behavior model.
 
@@ -54,16 +53,21 @@ It does not introduce a general public actor framework. The shared actor package
 
 The actor model has three layers:
 
-1. `Actor<Command>`
+1. `ActorContext<Command>`
+   - Small runtime capability surface provided to each actor.
+   - Hides actor scope assembly and name wiring from concrete actor constructors.
+   - Owns actor-local capabilities such as `self`, child `spawn(...)`, and owned-child `watch(...)`.
+
+2. `Actor<Command>`
    - Shared infrastructure.
    - Owns mailbox, loop job, startup barrier, termination barrier, lifecycle state, and shutdown behavior.
 
-2. Concrete actor implementation
+3. Concrete actor implementation
    - Defines a sealed command protocol `Command`.
    - Implements `handle(command)`.
    - Optionally overrides `postStart()`, `preStop()`, and `postStop()`.
 
-3. `ActorRef<Command>`
+4. `ActorRef<Command>`
    - Generic typed handle returned by `spawn(...)`.
    - Exposes universal `tell(command)` and `ask(...)`.
    - Is the only supported way actors or outsiders communicate with an actor.
@@ -75,13 +79,14 @@ Construction rules:
 - `spawn(...)` is the construction entry point
 - `spawn(...)` waits for startup to succeed
 - the loop is not started from `init`
+- concrete actors receive an `ActorContext<Command>` rather than raw `CoroutineScope` and `name`
 
 Design constraints:
 
 - there is no `ActorSystem`
-- there is no `ActorContext`
 - actors are modeled as classes, not returned behaviors
-- child actor creation, if needed later, should build on the same generic `spawn(...)` primitive rather than a required context object
+- `ActorContext` is intentionally small and capability-oriented, not a general framework service locator
+- child actor creation and owned-child watching are hosted on `ActorContext`
 
 ### 4.1 Naming model
 
@@ -142,347 +147,57 @@ Do not collapse domain state into actor infrastructure state.
 The current implementation lives under:
 
 - `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/actor/Actor.kt`
+- `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/actor/ActorContext.kt`
 - `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/actor/ActorRef.kt`
 - `pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/actor/RequestReply.kt`
 
-### 6.1 `Actor.kt`
+Target shared package surface:
 
-Reference implementation:
+- `ActorContext<Command>` exposes runtime capabilities needed by concrete actors
+- `Actor<Command>` owns mailbox and lifecycle infrastructure
+- `ActorRef<Command>` is the only externally shared communication handle
+- shared request/reply transport stays in the actor package
+
+Reference context shape:
 
 ```kotlin
-/**
- * Lifecycle states for the shared actor infrastructure.
- *
- * - [STARTING]: Actor exists but [Actor.postStart] has not completed successfully yet.
- * - [RUNNING]: Accepts new commands.
- * - [SHUTTING_DOWN]: No new commands accepted; draining or being cancelled.
- * - [SHUTDOWN]: Loop terminated and cleanup completed.
- */
-internal enum class ActorLifecycle {
-    STARTING,
-    RUNNING,
-    SHUTTING_DOWN,
-    SHUTDOWN,
+interface ActorContext<Command : Any> {
+    val name: String
+    val label: String
+    val self: ActorRef<Command>
+
+    suspend fun <ChildCommand : Any> spawn(
+        name: String,
+        dispatcher: CoroutineDispatcher? = null,
+        factory: (ActorContext<ChildCommand>) -> Actor<ChildCommand>,
+    ): ActorRef<ChildCommand>
+
+    fun watch(
+        child: ActorRef<*>,
+        onTerminated: (ChildTermination) -> Command,
+    )
 }
+```
 
-/**
- * Base failure type for actor transport and execution failures surfaced through [Result].
- */
-sealed class ActorException(
-    message: String,
-    cause: Throwable? = null,
-) : Exception(message, cause)
+Current semantics:
 
-/**
- * Actor could not accept a command or could not complete a previously accepted command
- * because it became unavailable.
- */
-enum class ActorUnavailableReason {
-    /** The actor rejected the command before acceptance because it is no longer running. */
-    ACTOR_CLOSED,
+- `spawn(...)` creates an owned child actor
+- owned children are shut down with the parent
+- `watch(...)` applies only to actors previously created through the same actor's `spawn(...)`
+- `watch(...)` is not a general-purpose watch for arbitrary actor refs
 
-    /** The actor is running, but the mailbox is at capacity and could not accept the command. */
-    MAILBOX_FULL,
+### 6.1 `Actor.kt`
 
-    /**
-     * The command had been accepted into the mailbox but was never executed by [Actor.handle]
-     * because shutdown failed pending reply-bearing commands before delivery.
-     */
-    NOT_DELIVERED,
-}
+Current implementation shape:
 
-class ActorUnavailable(
-    val reason: ActorUnavailableReason,
-    actorLabel: String,
-    cause: Throwable? = null,
-) : ActorException("$actorLabel is unavailable", cause)
-
-/**
- * Request/reply did not complete before the ask timeout elapsed.
- */
-class ActorAskTimeout(
-    actorLabel: String,
-    timeout: Duration,
-) : ActorException("$actorLabel did not reply within $timeout")
-
-/**
- * Actor command handling failed after the command was accepted.
- */
-class ActorCommandFailed(
-    actorLabel: String,
-    cause: Throwable,
-) : ActorException("$actorLabel command failed", cause)
-
-/**
- * Base actor infrastructure: mailbox, loop job, startup/termination barriers, lifecycle,
- * and shutdown behavior. Concrete actors define [Command], implement [handle], and
- * optionally override [postStart], [preStop], [postStop], and observability hooks for
- * undelivered commands.
- *
- * Construction is via a suspend `spawn(...)` that waits for [awaitStarted] and returns
- * a ref; the loop is not started from `init` and is not a separate public lifecycle.
- *
- * @param Command Sealed command type for this actor.
- * @param scope Scope that owns the mailbox loop; cancellation of this scope terminates the actor.
- * @param name Name used for the loop coroutine and error messages.
- * @param capacity Mailbox channel capacity; default is [Channel.BUFFERED].
- */
+```kotlin
 abstract class Actor<Command : Any>(
-    private val scope: CoroutineScope,
-    private val name: String,
+    protected val ctx: ActorContext<Command>,
     capacity: Int = Channel.BUFFERED,
 ) {
-    private val actorInstanceId = nextActorInstanceId.incrementAndGet()
-    private val label = "$name#$actorInstanceId"
-
-    /** Bounded mailbox for commands. */
-    protected val mailbox = Channel<Command>(capacity)
-
-    private val lifecycleMutex = Mutex()
-    private val started = CompletableDeferred<Unit>()
-    private val terminated = CompletableDeferred<Unit>()
-
-    private val lifecycle = atomic(ActorLifecycle.STARTING)
-
-    private val loopJob: Job =
-        scope.launch(CoroutineName(label)) {
-            try {
-                // Run actor-owned startup before the actor becomes externally usable.
-                // If this throws, spawn()/awaitStarted() fail and no ref is returned.
-                postStart()
-
-                // Only a coroutine that still sees STARTING may publish RUNNING.
-                // Shutdown may have won the race while postStart() was running.
-                val startedNow =
-                    lifecycleMutex.withLock {
-                        if (lifecycle.value != ActorLifecycle.STARTING) {
-                            false
-                        } else {
-                            lifecycle.value = ActorLifecycle.RUNNING
-                            true
-                        }
-                    }
-
-                if (!startedNow) {
-                    // Exit without entering the mailbox drain loop; fail startup so spawn() does not hang.
-                    if (!started.isCompleted) {
-                        started.completeExceptionally(
-                            CancellationException("$label was stopped during startup"),
-                        )
-                    }
-                    return@launch
-                }
-
-                // Publish the actor as started. From this point, refs may use it.
-                started.complete(Unit)
-
-                // Drain mailbox commands one at a time.
-                for (command in mailbox) {
-                    try {
-                        handle(command)
-                    } catch (t: Throwable) {
-                        // Command failure is actor-fatal by default.
-                        onCommandFailure(command, t)
-                        mailbox.close(t)
-                        throw t
-                    }
-                }
-            } catch (t: Throwable) {
-                // Startup or loop infrastructure failed; fail the startup barrier so spawn()/awaitStarted() do not hang.
-                if (!started.isCompleted) {
-                    started.completeExceptionally(t)
-                }
-                throw t
-            } finally {
-                // Publish terminal lifecycle before releasing shutdown waiters.
-                lifecycle.value = ActorLifecycle.SHUTDOWN
-                try {
-                    postStop()
-                } finally {
-                    // Shutdown callers and tests can now observe completion.
-                    terminated.complete(Unit)
-                }
-            }
-        }
-
-    /**
-     * Suspends until the actor has transitioned to [ActorLifecycle.RUNNING].
-     * Fails if startup failed or the actor was stopped during startup.
-     */
-    suspend fun awaitStarted() {
-        started.await()
-    }
-
-    /**
-     * Suspends until the actor loop has terminated and [ActorLifecycle.SHUTDOWN] is set.
-     */
-    suspend fun awaitTerminated() {
-        terminated.await()
-    }
-
-    /** Process one command. Called from the mailbox loop; one failure does not kill the actor. */
-    protected abstract suspend fun handle(command: Command)
-
-    /**
-     * Hook run before the mailbox drain loop starts. Use for actor-specific side jobs
-     * (watchdogs, pollers, child cleanup). Failures here cause startup to fail.
-     */
-    protected open suspend fun postStart() {}
-
-    /**
-     * Hook run when shutdown begins, after the mailbox is closed. Use to stop side jobs
-     * and release actor-owned resources.
-     */
-    protected open suspend fun preStop() {}
-
-    /**
-     * Hook run after the actor loop has terminated. Use this when cleanup must happen
-     * only after command draining/cancellation has completed.
-     */
-    protected open suspend fun postStop() {}
-
-    /**
-     * Called when [handle] throws.
-     *
-     * Default behavior:
-     * - complete the failing reply-bearing command exceptionally with [ActorCommandFailed]
-     * - stop the actor by rethrowing from the loop
-     */
-    protected open suspend fun onCommandFailure(
-        command: Command,
-        cause: Throwable,
-    ) {
-        if (command is ReplyRequest<*>) {
-            command.failRequest(ActorCommandFailed(label, cause))
-        }
-    }
-
-    /**
-     * Called for commands accepted earlier but never delivered to [handle].
-     *
-     * Default behavior is:
-     * - if the command carries shared reply transport, fail it with
-     *   [ActorUnavailable]
-     * - otherwise do nothing
-     *
-     * Concrete actors may override this for logging or metrics.
-     */
-    protected open fun onUndeliveredCommand(
-        command: Command,
-        reason: ActorUnavailableReason,
-    ) {
-        if (command is ReplyRequest<*>) {
-            command.failRequest(
-                ActorUnavailable(
-                    reason = reason,
-                    actorLabel = label,
-                ),
-            )
-        }
-    }
-
-    /** Throws if [lifecycle] is not [ActorLifecycle.RUNNING]. */
-    protected fun ensureAccepting() {
-        check(lifecycle.value == ActorLifecycle.RUNNING) {
-            "$name is not accepting new commands: ${lifecycle.value}"
-        }
-    }
-
-    /**
-     * Non-blocking send.
-     *
-     * Returns [Result.success] when [command] is accepted into the mailbox.
-     * Returns [Result.failure] with [ActorUnavailable] when the actor is not
-     * accepting commands or when the mailbox cannot accept the command.
-     */
-    protected fun send(command: Command): Result<Unit>
-
-    /**
-     * Shuts down the actor.
-     *
-     * Shutdown is single-flight: only the first caller performs the state transition and
-     * shutdown work; later callers simply wait for [awaitTerminated].
-     *
-     * Shutdown order:
-     * 1. Move the actor from [ActorLifecycle.STARTING] or [ActorLifecycle.RUNNING] to
-     *    [ActorLifecycle.SHUTTING_DOWN].
-     * 2. Close the mailbox so no new commands are accepted.
-     * 3. If [gracefully] is `true`, run [preStop] and allow the actor to terminate normally.
-     * 4. If graceful shutdown exceeds [timeout], or if [gracefully] is `false`, cancel the
-     *    actor loop and wait for termination.
-     *
-     * Notes:
-     * - [timeout] only has meaning when [gracefully] is `true`.
-     * - [preStop] is included in the graceful timeout budget, so it must be cancellation-cooperative.
-     * - When this function returns, the actor loop has terminated.
-     */
-    protected suspend fun shutdown(
-        gracefully: Boolean = true,
-        timeout: Duration? = null,
-    ) {
-        require(gracefully || timeout == null) {
-            "timeout is only valid when gracefully = true"
-        }
-
-        val shouldStop =
-            lifecycleMutex.withLock {
-                when (lifecycle.value) {
-                    ActorLifecycle.STARTING,
-                    ActorLifecycle.RUNNING,
-                    -> {
-                        lifecycle.value = ActorLifecycle.SHUTTING_DOWN
-                        true
-                    }
-                    ActorLifecycle.SHUTTING_DOWN,
-                    ActorLifecycle.SHUTDOWN,
-                    -> false
-                }
-            }
-
-        if (!shouldStop) {
-            terminated.await()
-            return
-        }
-
-        // Stop accepting new work immediately. Buffered commands may still drain unless we
-        // later escalate to loop cancellation.
-        mailbox.close()
-
-        suspend fun forceShutdown() {
-            // Hard stop: cancel the actor loop and wait until final termination is observed.
-            loopJob.cancel()
-            terminated.await()
-        }
-
-        if (!gracefully) {
-            // Immediate shutdown skips graceful waiting entirely.
-            forceShutdown()
-            return
-        }
-
-        if (timeout == null) {
-            // Unbounded graceful shutdown:
-            // 1. stop actor-owned side jobs/resources
-            // 2. allow normal loop termination
-            // 3. wait until termination is complete
-            preStop()
-            terminated.await()
-            return
-        }
-
-        val completedGracefully =
-            withTimeoutOrNull(timeout) {
-                // preStop is part of the graceful shutdown budget.
-                preStop()
-                terminated.await()
-                true
-            } == true
-
-        if (!completedGracefully) {
-            // Graceful shutdown exceeded the timeout. Escalate to hard cancellation.
-            forceShutdown()
-        }
-    }
+    // Resolves actor scope/name/label from the bound internal runtime context.
+    // Owns the mailbox loop, lifecycle, startup/termination barriers, child scope,
+    // and shutdown/failure handling.
 }
 ```
 
@@ -693,7 +408,7 @@ The shutdown sequence is:
 
 1. under `lifecycleMutex`, move to `SHUTTING_DOWN`
 2. close mailbox
-3. if graceful, run `preStop()` and wait for termination
+3. if graceful, run `preStop()`, shut down owned children, and wait for termination
 4. if timeout expires, fail pending queued commands as undelivered and cancel the loop
 5. in the loop `finally`, publish `SHUTDOWN`
 6. run `postStop()`
@@ -912,7 +627,7 @@ The library should expose a universal generic `spawn(...)` function.
 suspend fun <Command : Any> spawn(
     name: String,
     dispatcher: CoroutineDispatcher? = null,
-    factory: (CoroutineScope, String) -> Actor<Command>,
+    factory: (ctx: ActorContext<Command>) -> Actor<Command>,
 ): ActorRef<Command>
 ```
 
@@ -927,6 +642,7 @@ Reference behavior:
 - callers never invoke a separate public loop-boot `start()`
 - outsiders start actors through `spawn(...)`, not via public constructors
 - actor constructors should remain `private` or `internal`
+- `spawn(...)` creates the runtime context and passes it to the actor constructor
 - concrete actors may still offer companion helpers, but those helpers should delegate to the generic `spawn(...)`
 
 Reference implementation shape:
@@ -935,13 +651,14 @@ Reference implementation shape:
 suspend fun <Command : Any> spawn(
     name: String,
     dispatcher: CoroutineDispatcher? = null,
-    factory: (CoroutineScope, String) -> Actor<Command>,
+    factory: (ctx: ActorContext<Command>) -> Actor<Command>,
 ): ActorRef<Command> {
     val parentScope = CoroutineScope(currentCoroutineContext())
     val scope = createActorScope(parentScope, name, dispatcher)
-    val actor = factory(scope, name)
+    val ctx = createActorContext(scope, name)
+    val actor = factory(ctx)
     actor.awaitStarted()
-    return actor.self()
+    return ctx.self
 }
 ```
 
@@ -958,11 +675,13 @@ Rules:
 - overriding only the dispatcher is the public execution-policy knob
 - supervision policy is internal and fixed to supervised child scopes
 - if code needs direct access to the concrete actor instance rather than an `ActorRef`, it may still construct the actor directly in tests or internal infrastructure
+- callers should not pass raw actor runtime parameters such as `CoroutineScope` and `name` into concrete actor constructors
 
 Rationale:
 
 - this keeps top-level actor construction Kotlin-idiomatic in suspend code
 - it hides `SupervisorJob(...)` and scope assembly from callers
+- it hides raw `scope` / `name` plumbing from actor construction
 - it preserves deterministic `runTest` scheduling because the current coroutine context is inherited automatically
 - it keeps ownership explicit enough for structured concurrency without introducing an actor system object
 
@@ -987,23 +706,24 @@ The current implementation surfaced a few practical rules that should remain doc
 
 - normal actor shutdown and actor crash paths both need to cancel the internally owned actor scope job
 - child watch notifications should treat post-stop cancellation as normal termination when the child has already reached `SHUTDOWN`
-- tests that only need an `ActorRef` should use `spawn(name) { scope, name -> ... }`
+- tests that only need an `ActorRef` should use `spawn(name) { ctx -> ... }`
 - tests that need `awaitStarted()`, `awaitTerminated()`, or other concrete actor internals may still instantiate the actor directly
 
 Example convenience usage:
 
 ```kotlin
 val ref =
-    spawn("pipeline-orchestrator") { scope, name ->
-        PipelineOrchestratorActor(scope, name, deps)
+    spawn("pipeline-orchestrator") { ctx ->
+        PipelineOrchestratorActor(ctx, deps)
     }
 ```
 
 Example direct construction for infrastructure-only tests:
 
 ```kotlin
-val actor = MinimalActor(scope, "shutdown-during-startup", startupGate = startupGate)
-val shutdown = async { actor.self().shutdown() }
+val ctx = createActorContext<TestCommand>(scope, "shutdown-during-startup")
+val actor = MinimalActor(ctx, startupGate = startupGate)
+val shutdown = async { ctx.self.shutdown() }
 val startupFailure = async { runCatching { actor.awaitStarted() } }
 ```
 
@@ -1022,26 +742,33 @@ Reasoning:
 If a future need appears for shared actor runtime services, that can be introduced later.
 It is not part of the minimal actor model.
 
-### 11.4 Why there is no actor context
+### 11.4 Why there is a small actor context
 
-This design does not require a mandatory `ActorContext`.
+This design now requires a small `ActorContext`, but not an Akka-style behavior model or a
+general-purpose framework runtime object.
 
 Reasoning:
 
 - actors are implemented as classes with local state and lifecycle hooks
-- `handle(command)` is sufficient for the intended use cases
-- PipeKt does not currently need Akka-style behavior switching or a required context object on every handler call
+- `handle(command)` remains the dispatch model; no behavior switching is introduced
+- the implementation now needs a coherent home for `self`, child `spawn(...)`, and `watch(...)`
+- hiding raw `CoroutineScope` and actor `name` from concrete actor constructors improves ergonomics without changing the class-based model
 
-However, minimal actor-tree support is now required.
+`ActorContext` should stay intentionally small.
 
-The next iteration should support:
+Required responsibilities:
 
-- spawn helpers that inherit scope from a parent actor
-- owned child tracking
-- termination watching
+- expose `self`
+- expose `name` and `label`
+- host child `spawn(...)`
+- host owned-child `watch(...)`
 
-Those capabilities should be added as focused actor primitives without forcing a general-purpose
-`ActorContext` parameter into every actor API.
+Non-responsibilities:
+
+- no behavior transitions
+- no actor registry
+- no service locator for arbitrary runtime dependencies
+- no framework-wide mutable state
 
 The same applies to request/reply transport:
 
@@ -1095,6 +822,8 @@ Recommended semantics:
 - child failure does not automatically crash the parent
 - child termination is surfaced to the parent as a normal self-message
 - restart policy remains domain-specific and lives in the parent actor, not in the shared actor runtime
+- observation is explicit: `spawn(...)` creates ownership, `watch(...)` registers for termination messages
+- watching is limited to owned children rather than arbitrary actor refs
 
 Example event shape:
 
@@ -1168,18 +897,31 @@ self-sent `RuntimeTerminated(...)` commands rather than embedding restart logic 
 
 The shared actor package currently has focused tests under:
 
-- `pipekt/src/commonTest/kotlin/io/github/fpaschos/pipekt/actor/ActorTest.kt`
-- `pipekt/src/commonTest/kotlin/io/github/fpaschos/pipekt/actor/MinimalActor.kt`
+- `pipekt/src/commonTest/kotlin/io/github/fpaschos/pipekt/actor/ActorLifecycleTest.kt`
+- `pipekt/src/commonTest/kotlin/io/github/fpaschos/pipekt/actor/ActorMailboxTest.kt`
+- `pipekt/src/commonTest/kotlin/io/github/fpaschos/pipekt/actor/ActorRequestReplyTest.kt`
+- `pipekt/src/commonTest/kotlin/io/github/fpaschos/pipekt/actor/ActorSpawnScopeTest.kt`
+- `pipekt/src/commonTest/kotlin/io/github/fpaschos/pipekt/actor/ActorChildOwnershipTest.kt`
+- `pipekt/src/commonTest/kotlin/io/github/fpaschos/pipekt/actor/ActorWatchTest.kt`
+- `pipekt/src/commonTest/kotlin/io/github/fpaschos/pipekt/actor/ActorFixtures.kt`
 
 Current coverage includes:
 
 - spawn waits for startup
-- repeated requests before shutdown
-- shutdown rejects later requests
-- idempotent concurrent shutdown
-- actor stops on command failure
-- pending reply-bearing commands fail as not-delivered when termination wins
-- shutdown during startup
+- startup failure does not publish a half-started ref
+- shutdown during startup fails startup cleanly
+- concurrent shutdown remains single-flight
+- startup/shutdown hooks run in sequence
+- tell/ask share the same generic typed ref surface
+- actor command failure becomes `ActorCommandFailed`
+- ask timeout becomes `ActorAskTimeout`
+- one-way message order is preserved
+- queued reply-bearing commands fail as not-delivered when termination wins
+- undelivered one-way commands flow through `onUndeliveredCommand`
+- owned children shut down with the parent
+- owned-child watch events are emitted explicitly through `watch(...)`
+- spawn preserves semantic `name` and unique diagnostic `label`
+- `ctx.self` matches the published ref
 
 ---
 
@@ -1218,5 +960,6 @@ Consumers still to migrate:
 - Pending reply-bearing commands are failed on termination; pending one-way commands are dropped.
 - The base actor exposes an undelivered-command hook instead of a dead-letter subsystem.
 - No per-concrete actor ref type is required by the core model.
-- No actor system or actor context is required by the core model.
+- No actor system is required by the core model.
+- A small `ActorContext` is required by the core model and remains limited to runtime actor capabilities.
 - Reply-bearing command failures do not leave requesters suspended forever; shared request infrastructure bridges actor failure into the reply transport.

@@ -14,25 +14,25 @@ class ActorChildOwnershipTest :
     FunSpec({
         test("parent shutdown stops owned children before termination completes") {
             runTest {
-                val events = mutableListOf<String>()
+                val events = EventRecorder()
                 val ref =
-                    spawn("parent-actor") { scope, name ->
-                        ParentActor(scope, name, events)
+                    spawn("parent-actor") { ctx ->
+                        ParentActor(ctx, events)
                     }
 
                 ref.shutdown()
                 advanceUntilIdle()
 
-                events.shouldContain("child:postStop")
+                events.snapshot().shouldContain("child:postStop")
             }
         }
 
         test("child failure does not automatically crash the parent") {
             runTest {
-                val events = mutableListOf<String>()
+                val events = EventRecorder()
                 val ref =
-                    spawn("parent-survives-child") { scope, name ->
-                        ParentActor(scope, name, events)
+                    spawn("parent-survives-child") { ctx ->
+                        ParentActor(ctx, events)
                     }
 
                 ref.ask(1.seconds) { replyTo -> ParentCommand.FailChild(replyTo) }.shouldBeSuccess(Unit)

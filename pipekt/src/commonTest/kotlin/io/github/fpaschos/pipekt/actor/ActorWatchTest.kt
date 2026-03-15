@@ -13,13 +13,13 @@ class ActorWatchTest :
     FunSpec({
         test("watched child normal termination emits one parent self-message") {
             runTest {
-                val events = mutableListOf<String>()
-                val ref = spawn("watch-parent") { scope, name -> ParentActor(scope, name, events) }
+                val events = EventRecorder()
+                val ref = spawn("watch-parent") { ctx -> ParentActor(ctx, events) }
 
                 ref.ask(1.seconds) { replyTo -> ParentCommand.StopChild(replyTo) }.getOrThrow()
                 advanceUntilIdle()
 
-                val childEvents = events.filter { it.startsWith("parent:child-terminated:") }
+                val childEvents = events.snapshot().filter { it.startsWith("parent:child-terminated:") }
                 childEvents.shouldHaveSize(1)
                 childEvents.single().shouldContain(":normal")
 
@@ -29,13 +29,13 @@ class ActorWatchTest :
 
         test("watched child failure emits one parent self-message with the cause") {
             runTest {
-                val events = mutableListOf<String>()
-                val ref = spawn("watch-failure-parent") { scope, name -> ParentActor(scope, name, events) }
+                val events = EventRecorder()
+                val ref = spawn("watch-failure-parent") { ctx -> ParentActor(ctx, events) }
 
                 ref.ask(1.seconds) { replyTo -> ParentCommand.FailChild(replyTo) }.getOrThrow()
                 advanceUntilIdle()
 
-                val childEvents = events.filter { it.startsWith("parent:child-terminated:") }
+                val childEvents = events.snapshot().filter { it.startsWith("parent:child-terminated:") }
                 childEvents.shouldHaveSize(1)
                 childEvents.single().shouldContain("child-boom")
 

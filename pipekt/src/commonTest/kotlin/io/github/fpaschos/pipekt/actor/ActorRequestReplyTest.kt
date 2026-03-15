@@ -17,7 +17,7 @@ class ActorRequestReplyTest :
     FunSpec({
         test("typed refs support tell and ask through the shared reply channel") {
             runTest {
-                val ref = spawn("tell-ask-actor") { scope, name -> MinimalActor(scope, name) }
+                val ref = spawn("tell-ask-actor") { ctx -> MinimalActor(ctx) }
 
                 ref.tell(TestCommand.Record("a")).shouldBeSuccess(Unit)
                 ref.tell(TestCommand.Record("b")).shouldBeSuccess(Unit)
@@ -35,7 +35,7 @@ class ActorRequestReplyTest :
 
         test("handler exceptions surface as command failures") {
             runTest {
-                val ref = spawn("failure-actor") { scope, name -> MinimalActor(scope, name) }
+                val ref = spawn("failure-actor") { ctx -> MinimalActor(ctx) }
 
                 val failure = ref.ask(1.seconds) { replyTo -> TestCommand.Fail(replyTo) }.shouldBeFailure()
                 failure.shouldBeInstanceOf<ActorCommandFailed>()
@@ -45,7 +45,7 @@ class ActorRequestReplyTest :
         test("ask timeouts return ActorAskTimeoutException") {
             runTest {
                 val gate = CompletableDeferred<Unit>()
-                val ref = spawn("timeout-actor") { scope, name -> MinimalActor(scope, name) }
+                val ref = spawn("timeout-actor") { ctx -> MinimalActor(ctx) }
 
                 val failure =
                     ref
