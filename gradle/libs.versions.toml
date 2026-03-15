@@ -5,6 +5,7 @@ ktlint-plugin         = "13.1.0"
 ktlint-rules          = "1.7.1"
 arrow                 = "2.2.1.1"
 kotlinx-coroutines    = "1.10.1"
+kotlinx-atomicfu     = "0.29.0"
 kotlinx-serialization = "1.10.0"
 kotest                = "6.0.4"
 ksp                   = "2.3.6"
@@ -15,6 +16,7 @@ arrow-fx                       = { module = "io.arrow-kt:arrow-fx-coroutines",  
 arrow-resilience                = { module = "io.arrow-kt:arrow-resilience",                       version.ref = "arrow" }
 kotlinx-coroutines-core        = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core",      version.ref = "kotlinx-coroutines" }
 kotlinx-coroutines-test        = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test",      version.ref = "kotlinx-coroutines" }
+kotlinx-atomicfu              = { module = "org.jetbrains.kotlinx:atomicfu",                      version.ref = "kotlinx-atomicfu" }
 kotlinx-serialization-core     = { module = "org.jetbrains.kotlinx:kotlinx-serialization-core",   version.ref = "kotlinx-serialization" }
 kotlinx-serialization-json     = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json",   version.ref = "kotlinx-serialization" }
 kotest-framework-engine        = { module = "io.kotest:kotest-framework-engine",                  version.ref = "kotest" }

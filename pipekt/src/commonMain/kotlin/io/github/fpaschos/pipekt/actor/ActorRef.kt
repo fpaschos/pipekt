@@ -8,7 +8,7 @@ import kotlin.time.Duration
  *
  * Concrete refs extend this class and expose domain operations that delegate to the
  * underlying actor; [shutdownActor] is implemented to forward to the actor's
- * shutdown (e.g. [Actor.shutdownGracefully]).
+ * shutdown (e.g. [Actor.shutdown]).
  */
 abstract class ActorRef {
     /**

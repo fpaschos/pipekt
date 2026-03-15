@@ -169,36 +169,49 @@ internal abstract class Actor<Command : Any>(
     private val loopJob: Job =
         scope.launch(CoroutineName(actorName)) {
             try {
+                // Run actor-owned startup before the actor becomes externally usable.
+                // If this throws, spawn()/awaitStarted() must fail.
                 postStart()
 
                 lifecycleMutex.withLock {
+                    // Shutdown may have won the race while postStart() was running.
+                    // Only a coroutine that still sees STARTING may publish RUNNING.
                     if (lifecycle.value != ActorLifecycle.STARTING) {
                         if (!started.isCompleted) {
                             started.completeExceptionally(
                                 CancellationException("$actorName was stopped during startup"),
                             )
                         }
+                        // Exit without entering the normal mailbox drain loop.
                         return@launch
                     }
 
+                    // Publish the actor as started. From this point, refs may use it.
                     lifecycle.value = ActorLifecycle.RUNNING
                     started.complete(Unit)
                 }
 
+                // Main actor loop: drain mailbox commands one at a time.
                 for (command in mailbox) {
                     try {
+                        // Command handling is the serialized mutation point for actor state.
                         handle(command)
                     } catch (t: Throwable) {
+                        // Command failure is handled separately from startup/loop infrastructure failure.
                         onUnhandledCommandFailure(command, t)
                     }
                 }
             } catch (t: Throwable) {
+                // Startup or loop infrastructure failed. If startup was not published yet,
+                // fail the startup barrier so spawn()/awaitStarted() do not hang.
                 if (!started.isCompleted) {
                     started.completeExceptionally(t)
                 }
                 throw t
             } finally {
+                // Publish terminal lifecycle before releasing shutdown waiters.
                 lifecycle.value = ActorLifecycle.SHUTDOWN
+                // Termination barrier: shutdown callers and tests can now observe completion.
                 terminated.complete(Unit)
             }
         }

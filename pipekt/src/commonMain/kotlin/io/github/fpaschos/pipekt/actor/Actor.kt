@@ -1,5 +1,6 @@
 package io.github.fpaschos.pipekt.actor
 
+import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineName
@@ -67,42 +68,63 @@ abstract class Actor<Command : Any>(
     private val started = CompletableDeferred<Unit>()
     private val terminated = CompletableDeferred<Unit>()
 
-    private var lifecycle: ActorLifecycle = ActorLifecycle.STARTING
+    private val lifecycle = atomic(ActorLifecycle.STARTING)
 
     private val loopJob: Job =
         scope.launch(CoroutineName(actorName)) {
             try {
+                // Run actor-owned startup before the actor becomes externally usable.
+                // If this throws, spawn()/awaitStarted() fail and no ref is returned.
                 postStart()
 
-                lifecycleMutex.withLock {
-                    if (lifecycle != ActorLifecycle.STARTING) {
-                        if (!started.isCompleted) {
-                            started.completeExceptionally(
-                                CancellationException("$actorName was stopped during startup"),
-                            )
+                // Only a coroutine that still sees STARTING may publish RUNNING.
+                // Shutdown may have won the race while postStart() was running.
+                val startedNow =
+                    lifecycleMutex.withLock {
+                        if (lifecycle.value != ActorLifecycle.STARTING) {
+                            false
+                        } else {
+                            lifecycle.value = ActorLifecycle.RUNNING
+                            true
                         }
-                        return@launch
                     }
 
-                    lifecycle = ActorLifecycle.RUNNING
-                    started.complete(Unit)
+                if (!startedNow) {
+                    // Exit without entering the mailbox drain loop; fail startup so spawn() does not hang.
+                    if (!started.isCompleted) {
+                        started.completeExceptionally(
+                            CancellationException("$actorName was stopped during startup"),
+                        )
+                    }
+                    return@launch
                 }
+                // Publish the actor as started. From this point, refs may use it.
+                started.complete(Unit)
 
+                // Drain mailbox commands one at a time.
                 for (command in mailbox) {
                     try {
                         handle(command)
                     } catch (t: Throwable) {
+                        // Command failure is non-fatal; actor keeps running.
                         onUnhandledCommandFailure(command, t)
                     }
                 }
             } catch (t: Throwable) {
+                // Startup or loop infrastructure failed; fail the startup barrier so spawn()/awaitStarted() do not hang.
                 if (!started.isCompleted) {
                     started.completeExceptionally(t)
                 }
                 throw t
             } finally {
-                lifecycle = ActorLifecycle.SHUTDOWN
-                terminated.complete(Unit)
+                // Publish terminal lifecycle before releasing shutdown waiters.
+                lifecycle.value = ActorLifecycle.SHUTDOWN
+                try {
+                    postStop()
+                } finally {
+                    // Shutdown callers and tests can now observe completion.
+                    terminated.complete(Unit)
+                }
             }
         }
 
@@ -137,6 +159,12 @@ abstract class Actor<Command : Any>(
     protected open suspend fun preStop() {}
 
     /**
+     * Hook run after the actor loop has terminated. Use this when cleanup must happen
+     * only after command draining/cancellation has completed.
+     */
+    protected open suspend fun postStop() {}
+
+    /**
      * Called when [handle] throws. Default is non-fatal; override to complete replies
      * exceptionally or record failures in an actor-specific way.
      */
@@ -144,13 +172,15 @@ abstract class Actor<Command : Any>(
         command: Command,
         cause: Throwable,
     ) {
-        // Default: non-fatal. Concrete actors complete replies or record via observability.
+        if (command is ReplyingCommand) {
+            command.completeExceptionally(cause)
+        }
     }
 
     /** Throws if [lifecycle] is not [ActorLifecycle.RUNNING]. */
     protected fun ensureAccepting() {
-        check(lifecycle == ActorLifecycle.RUNNING) {
-            "$actorName is not accepting new commands: $lifecycle"
+        check(lifecycle.value == ActorLifecycle.RUNNING) {
+            "$actorName is not accepting new commands: ${lifecycle.value}"
         }
     }
 
@@ -160,7 +190,7 @@ abstract class Actor<Command : Any>(
      * or throw [ActorMailboxFullException] when full.
      */
     protected fun trySend(command: Command): ChannelResult<Unit> {
-        if (lifecycle != ActorLifecycle.RUNNING) {
+        if (lifecycle.value != ActorLifecycle.RUNNING) {
             throw ActorMailboxClosedException(actorName)
         }
         return mailbox.trySend(command)
@@ -192,80 +222,89 @@ abstract class Actor<Command : Any>(
     }
 
     /**
-     * Graceful shutdown: transition to [ActorLifecycle.SHUTTING_DOWN], close mailbox, run [preStop],
-     * drain buffered commands, then wait for termination. If [timeout] is set and exceeded,
-     * cancels the loop job and waits for termination. Idempotent after first caller.
+     * Shuts down the actor.
+     *
+     * Shutdown is single-flight: only the first caller performs the state transition and
+     * shutdown work; later callers simply wait for [awaitTerminated].
+     *
+     * Shutdown order:
+     * 1. Move the actor from [ActorLifecycle.STARTING] or [ActorLifecycle.RUNNING] to
+     *    [ActorLifecycle.SHUTTING_DOWN].
+     * 2. Close the mailbox so no new commands are accepted.
+     * 3. If [gracefully] is `true`, run [preStop] and allow the actor to terminate normally.
+     * 4. If graceful shutdown exceeds [timeout], or if [gracefully] is `false`, cancel the
+     *    actor loop and wait for termination.
+     *
+     * Notes:
+     * - [timeout] only has meaning when [gracefully] is `true`.
+     * - [preStop] is included in the graceful timeout budget, so it must be cancellation-cooperative.
+     * - When this function returns, the actor loop has terminated.
      */
-    protected suspend fun shutdownGracefully(timeout: Duration? = null) {
+    protected suspend fun shutdown(
+        gracefully: Boolean = true,
+        timeout: Duration? = null,
+    ) {
+        require(gracefully || timeout == null) {
+            "timeout is only valid when gracefully = true"
+        }
+
         val shouldStop =
             lifecycleMutex.withLock {
-                when (lifecycle) {
+                when (lifecycle.value) {
                     ActorLifecycle.STARTING,
                     ActorLifecycle.RUNNING,
                     -> {
-                        lifecycle = ActorLifecycle.SHUTTING_DOWN
+                        lifecycle.value = ActorLifecycle.SHUTTING_DOWN
                         true
                     }
-
                     ActorLifecycle.SHUTTING_DOWN,
                     ActorLifecycle.SHUTDOWN,
-                    -> {
-                        false
-                    }
+                    -> false
                 }
             }
 
-        if (shouldStop) {
-            mailbox.close()
-            preStop()
-        }
-
-        if (timeout == null) {
+        if (!shouldStop) {
             terminated.await()
             return
         }
 
-        val completed =
+        // Stop accepting new work immediately. Buffered commands may still drain unless we
+        // later escalate to loop cancellation.
+        mailbox.close()
+
+        suspend fun forceShutdown() {
+            // Hard stop: cancel the actor loop and wait until final termination is observed.
+            loopJob.cancel()
+            terminated.await()
+        }
+
+        if (!gracefully) {
+            // Immediate shutdown skips graceful waiting entirely.
+            forceShutdown()
+            return
+        }
+
+        if (timeout == null) {
+            // Unbounded graceful shutdown:
+            // 1. stop actor-owned side jobs/resources
+            // 2. allow normal loop termination
+            // 3. wait until termination is complete
+            preStop()
+            terminated.await()
+            return
+        }
+
+        val completedGracefully =
             withTimeoutOrNull(timeout) {
+                // preStop is part of the graceful shutdown budget.
+                preStop()
                 terminated.await()
                 true
             } == true
 
-        if (!completed) {
-            loopJob.cancel()
-            terminated.await()
+        if (!completedGracefully) {
+            // Graceful shutdown exceeded the timeout. Escalate to hard cancellation.
+            forceShutdown()
         }
-    }
-
-    /**
-     * Forced shutdown: transition to [ActorLifecycle.SHUTTING_DOWN], close mailbox, run [preStop],
-     * cancel the loop job, then wait for termination. Idempotent after first caller.
-     */
-    protected suspend fun shutdownNow() {
-        val shouldStop =
-            lifecycleMutex.withLock {
-                when (lifecycle) {
-                    ActorLifecycle.STARTING,
-                    ActorLifecycle.RUNNING,
-                    -> {
-                        lifecycle = ActorLifecycle.SHUTTING_DOWN
-                        true
-                    }
-
-                    ActorLifecycle.SHUTTING_DOWN,
-                    ActorLifecycle.SHUTDOWN,
-                    -> {
-                        false
-                    }
-                }
-            }
-
-        if (shouldStop) {
-            mailbox.close()
-            preStop()
-        }
-
-        loopJob.cancel()
-        terminated.await()
     }
 }
