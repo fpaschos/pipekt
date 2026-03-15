@@ -552,29 +552,34 @@ interface ReplyChannel<in T> {
 3. Let reply-bearing commands carry a `ReplyChannel<T>` or similar responder rather than a raw
    `CompletableDeferred<T>`.
 
-4. Replace per-command `completeExceptionally(...)` implementations with either:
-   - a shared abstract base command for request/reply commands, or
-   - a typed request interface whose failure wiring is implemented once in shared code
+4. Replace per-command `completeExceptionally(...)` implementations with shared request-carrying
+   infrastructure implemented once in the actor package.
 
 Example target shape:
 
 ```kotlin
-interface Request<Reply> : ReplyingCommand
+interface ReplyRequest<Reply> : ReplyingCommand {
+    val replyTo: ReplyChannel<Reply>
+}
 
-data class Ping(
-    val value: String,
-    private val replyTo: ReplyChannel<String>,
-) : Request<String> {
-    override fun completeExceptionally(cause: Throwable) {
+abstract class Request<Reply>(
+    final override val replyTo: ReplyChannel<Reply>,
+) : ReplyRequest<Reply> {
+    final override fun completeExceptionally(cause: Throwable) {
         replyTo.failure(cause)
     }
 }
+
+data class Ping(
+    val value: String,
+    private val channel: ReplyChannel<String>,
+) : Request<String>(channel)
 ```
 
 The exact API may differ, but the design goal is stable:
 
 - command protocols should describe reply intent, not coroutine deferred mechanics
-- per-command failure plumbing should be minimized or eliminated
+- per-command failure plumbing should be eliminated
 
 ### 6.2.2 Why not expose raw `CompletableDeferred`
 
@@ -594,6 +599,7 @@ Target direction:
 - external callers should still use `ask(timeout) { ... }`
 - command builders should receive a small reply abstraction rather than a raw deferred
 - actor handlers should reply via `replyTo.success(...)` or equivalent
+- request failure wiring should live in shared request infrastructure, not in every command type
 
 This is closer to the actor intent found in systems such as Akka Typed, where a command carries
 `replyTo` rather than a future/promise object.
@@ -605,7 +611,6 @@ Reference implementation:
 ```kotlin
 package io.github.fpaschos.pipekt.actor
 
-import kotlinx.coroutines.CompletableDeferred
 import kotlin.time.Duration
 
 /**
@@ -641,13 +646,13 @@ interface ActorRef<in Command : Any> {
  * Universal request/reply helper built on reply-bearing commands.
  *
  * The actor library does not model response types in [ActorRef] directly. Instead, the
- * command protocol carries the reply handle, and [ask] creates and awaits it.
+ * command protocol carries the reply transport, and [ask] creates and awaits it.
  */
 suspend fun <Command : Any, Reply> ActorRef<Command>.ask(
     timeout: Duration,
-    build: (CompletableDeferred<Reply>) -> Command,
+    build: (ReplyChannel<Reply>) -> Command,
 ): Result<Reply> {
-    val reply = CompletableDeferred<Reply>()
+    val reply = deferredReplyChannel<Reply>()
     val enqueue = tell(build(reply))
     if (enqueue.isFailure) {
         return Result.failure(enqueue.exceptionOrNull()!!)
@@ -796,7 +801,7 @@ protected open fun onUndeliveredCommand(
 
 Default behavior:
 
-- if `command` implements `ReplyingCommand`, complete it exceptionally with
+- if `command` carries a shared request reply channel, fail it with
   `ActorUnavailableException(reason = NOT_DELIVERED, ...)`
 - otherwise do nothing
 
@@ -852,7 +857,7 @@ real use case justifies them.
 The public transport contract is intentionally small and universal:
 
 - `ActorRef<Command>.tell(command): Result<Unit>`
-- `ActorRef<Command>.ask(timeout) { reply -> Command(reply, ...) }: Result<Reply>`
+- `ActorRef<Command>.ask(timeout) { replyTo -> Command(replyTo, ...) }: Result<Reply>`
 
 Rules:
 
@@ -866,9 +871,10 @@ Rules:
 
 Ergonomic follow-up:
 
-- the current `ask(...)` may continue to use `CompletableDeferred` internally
-- the command builder API should move toward a small reply abstraction such as `ReplyChannel<T>`
-- this keeps the public caller ergonomics while removing deferred mechanics from command protocols
+- `ask(...)` may continue to use `CompletableDeferred` internally
+- the command builder API should use a small reply abstraction such as `ReplyChannel<T>`
+- command types should not implement reply failure plumbing one by one
+- shared request infrastructure should bridge actor failures into the reply transport
 
 ---
 
@@ -1014,6 +1020,12 @@ The next iteration should support:
 Those capabilities should be added as focused actor primitives without forcing a general-purpose
 `ActorContext` parameter into every actor API.
 
+The same applies to request/reply transport:
+
+- actors may use small shared request carrier types
+- actors should not be forced to implement transport plumbing on every request command
+- domain command types should stay close to domain intent
+
 ---
 
 ## 12. Worked example: `PipelineOrchestrator`
@@ -1085,7 +1097,7 @@ sealed interface PipelineOrchestratorCommand {
         val planVersion: String,
         val config: RuntimeConfig,
         val replyTo: ReplyChannel<RuntimeRef>,
-    ) : PipelineOrchestratorCommand, ReplyingCommand
+    ) : PipelineOrchestratorCommand, ReplyRequest<RuntimeRef>
 
     data class StopPipeline(
         val pipelineName: String,
@@ -1093,7 +1105,7 @@ sealed interface PipelineOrchestratorCommand {
 
     data class ListPipelines(
         val replyTo: ReplyChannel<Set<String>>,
-    ) : PipelineOrchestratorCommand, ReplyingCommand
+    ) : PipelineOrchestratorCommand, ReplyRequest<Set<String>>
 
     data class RuntimeTerminated(
         val pipelineName: String,
@@ -1101,6 +1113,9 @@ sealed interface PipelineOrchestratorCommand {
     ) : PipelineOrchestratorCommand
 }
 ```
+
+In concrete code, commands like `StartPipeline` and `ListPipelines` should normally extend or use
+shared request-carrying infrastructure so they do not each implement reply failure plumbing.
 
 In this model the public handle is simply:
 
@@ -1181,4 +1196,4 @@ Consumers still to migrate:
 - The base actor exposes an undelivered-command hook instead of a dead-letter subsystem.
 - No per-concrete actor ref type is required by the core model.
 - No actor system or actor context is required by the core model.
-- Reply-bearing command failures do not leave requesters suspended forever when commands opt into `ReplyingCommand`.
+- Reply-bearing command failures do not leave requesters suspended forever; shared request infrastructure bridges actor failure into the reply transport.

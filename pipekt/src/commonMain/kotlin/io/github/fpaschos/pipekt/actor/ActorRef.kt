@@ -1,6 +1,5 @@
 package io.github.fpaschos.pipekt.actor
 
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import kotlin.time.Duration
@@ -90,12 +89,15 @@ interface ActorRef<in Command : Any> {
 
 /**
  * Universal request/reply helper built on reply-bearing commands.
+ *
+ * The caller receives a [ReplyChannel] builder parameter while the deferred implementation stays
+ * internal to the actor package.
  */
 suspend fun <Command : Any, Reply> ActorRef<Command>.ask(
     timeout: Duration,
-    build: (CompletableDeferred<Reply>) -> Command,
+    build: (ReplyChannel<Reply>) -> Command,
 ): Result<Reply> {
-    val reply = CompletableDeferred<Reply>()
+    val reply = deferredReplyChannel<Reply>()
     val enqueue = tell(build(reply))
     if (enqueue.isFailure) {
         return Result.failure(enqueue.exceptionOrNull()!!)
