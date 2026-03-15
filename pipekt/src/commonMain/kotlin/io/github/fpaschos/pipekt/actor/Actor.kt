@@ -31,7 +31,8 @@ internal enum class ActorLifecycle {
 /**
  * Base actor infrastructure: mailbox, loop job, startup/termination barriers, lifecycle,
  * and shutdown behavior. Concrete actors define [Command], implement [handle], and
- * optionally override [postStart] and [preStop].
+ * optionally override [postStart], [preStop], [postStop], [onCommandFailure], and
+ * [onUndeliveredCommand].
  *
  * Construction is via a suspend `spawn(...)` that waits for [awaitStarted] and returns
  * a ref; the loop is not started from `init` and is not a separate public lifecycle.
@@ -106,16 +107,19 @@ abstract class Actor<Command : Any>(
                     try {
                         handle(command)
                     } catch (t: Throwable) {
-                        // Command failure is non-fatal; actor keeps running.
-                        onUnhandledCommandFailure(command, t)
+                        // Command failure is actor-fatal by default.
+                        onCommandFailure(command, t)
+                        mailbox.close(t)
+                        failPendingCommands(ActorUnavailableReason.NOT_DELIVERED)
+                        throw t
                     }
                 }
             } catch (t: Throwable) {
                 // Startup or loop infrastructure failed; fail the startup barrier so spawn()/awaitStarted() do not hang.
                 if (!started.isCompleted) {
                     started.completeExceptionally(t)
+                    throw t
                 }
-                throw t
             } finally {
                 // Publish terminal lifecycle before releasing shutdown waiters.
                 lifecycle.value = ActorLifecycle.SHUTDOWN
@@ -143,7 +147,7 @@ abstract class Actor<Command : Any>(
         terminated.await()
     }
 
-    /** Process one command. Called from the mailbox loop; one failure does not kill the actor. */
+    /** Process one command. Called from the mailbox loop. */
     protected abstract suspend fun handle(command: Command)
 
     /**
@@ -165,15 +169,37 @@ abstract class Actor<Command : Any>(
     protected open suspend fun postStop() {}
 
     /**
-     * Called when [handle] throws. Default is non-fatal; override to complete replies
-     * exceptionally or record failures in an actor-specific way.
+     * Called when [handle] throws.
+     *
+     * Default behavior completes the failing reply-bearing command exceptionally with
+     * [ActorCommandFailedException]. The actor stops after this hook returns.
      */
-    protected open suspend fun onUnhandledCommandFailure(
+    protected open suspend fun onCommandFailure(
         command: Command,
         cause: Throwable,
     ) {
         if (command is ReplyingCommand) {
-            command.completeExceptionally(ActorCommandFailed(actorName, cause))
+            command.completeExceptionally(ActorCommandFailedException(actorName, cause))
+        }
+    }
+
+    /**
+     * Called for commands accepted earlier but never delivered to [handle].
+     *
+     * Default behavior completes reply-bearing commands exceptionally with
+     * [ActorUnavailableException] and ignores one-way commands.
+     */
+    protected open fun onUndeliveredCommand(
+        command: Command,
+        reason: ActorUnavailableReason,
+    ) {
+        if (command is ReplyingCommand) {
+            command.completeExceptionally(
+                ActorUnavailableException(
+                    reason = reason,
+                    actorName = actorName,
+                ),
+            )
         }
     }
 
@@ -181,13 +207,13 @@ abstract class Actor<Command : Any>(
      * Non-blocking send.
      *
      * Returns [Result.success] when [command] is accepted into the mailbox.
-     * Returns [Result.failure] with [ActorUnavailable] when the actor is not
+     * Returns [Result.failure] with [ActorUnavailableException] when the actor is not
      * accepting commands or when the mailbox cannot accept the command.
      */
     protected fun send(command: Command): Result<Unit> {
         if (lifecycle.value != ActorLifecycle.RUNNING) {
             return Result.failure(
-                ActorUnavailable(
+                ActorUnavailableException(
                     reason = ActorUnavailableReason.ACTOR_CLOSED,
                     actorName = actorName,
                 ),
@@ -199,7 +225,7 @@ abstract class Actor<Command : Any>(
             Result.success(Unit)
         } else {
             Result.failure(
-                ActorUnavailable(
+                ActorUnavailableException(
                     reason = ActorUnavailableReason.MAILBOX_FULL,
                     actorName = actorName,
                     cause = result.exceptionOrNull(),
@@ -263,7 +289,7 @@ abstract class Actor<Command : Any>(
         mailbox.close()
 
         suspend fun forceShutdown() {
-            failPendingReplies()
+            failPendingCommands(ActorUnavailableReason.NOT_DELIVERED)
             // Hard stop: cancel the actor loop and wait until final termination is observed.
             loopJob.cancel()
             terminated.await()
@@ -299,17 +325,10 @@ abstract class Actor<Command : Any>(
         }
     }
 
-    private fun failPendingReplies() {
+    private fun failPendingCommands(reason: ActorUnavailableReason) {
         while (true) {
             val buffered = mailbox.tryReceive().getOrNull() ?: return
-            if (buffered is ReplyingCommand) {
-                buffered.completeExceptionally(
-                    ActorUnavailable(
-                        reason = ActorUnavailableReason.NOT_DELIVERED,
-                        actorName = actorName,
-                    ),
-                )
-            }
+            onUndeliveredCommand(buffered, reason)
         }
     }
 }

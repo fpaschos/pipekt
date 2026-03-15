@@ -31,7 +31,7 @@ enum class ActorUnavailableReason {
     NOT_DELIVERED,
 }
 
-class ActorUnavailable(
+class ActorUnavailableException(
     val reason: ActorUnavailableReason,
     actorName: String,
     cause: Throwable? = null,
@@ -40,7 +40,7 @@ class ActorUnavailable(
 /**
  * Request/reply did not complete before the timeout elapsed.
  */
-class ActorAskTimeout(
+class ActorAskTimeoutException(
     actorName: String,
     timeout: Duration,
 ) : ActorException("$actorName did not reply within $timeout")
@@ -48,7 +48,7 @@ class ActorAskTimeout(
 /**
  * Actor command handling failed after the command was accepted.
  */
-class ActorCommandFailed(
+class ActorCommandFailedException(
     actorName: String,
     cause: Throwable,
 ) : ActorException("$actorName command failed", cause)
@@ -66,7 +66,7 @@ interface ActorRef<in Command : Any> {
      * Sends [command] to the target actor without waiting for a reply.
      *
      * Returns [Result.success] when the command was accepted. Returns [Result.failure]
-     * with [ActorUnavailable] when the actor cannot accept the command.
+     * with [ActorUnavailableException] when the actor cannot accept the command.
      */
     fun tell(command: Command): Result<Unit>
 
@@ -96,7 +96,7 @@ suspend fun <Command : Any, Reply> ActorRef<Command>.ask(
     return try {
         Result.success(withTimeout(timeout) { reply.await() })
     } catch (_: TimeoutCancellationException) {
-        val timeoutException = ActorAskTimeout(actorName, timeout)
+        val timeoutException = ActorAskTimeoutException(actorName, timeout)
         reply.cancel()
         Result.failure(timeoutException)
     } catch (t: Throwable) {

@@ -175,9 +175,25 @@ sealed class ActorException(
  * Actor could not accept a command or could not complete a previously accepted command
  * because it became unavailable.
  */
+enum class ActorUnavailableReason {
+    /** The actor rejected the command before acceptance because it is no longer running. */
+    ACTOR_CLOSED,
+
+    /** The actor is running, but the mailbox is at capacity and could not accept the command. */
+    MAILBOX_FULL,
+
+    /**
+     * The command had been accepted into the mailbox but was never executed by [Actor.handle]
+     * because shutdown failed pending reply-bearing commands before delivery.
+     */
+    NOT_DELIVERED,
+}
+
 class ActorUnavailableException(
+    val reason: ActorUnavailableReason,
     actorName: String,
-) : ActorException("$actorName is unavailable")
+    cause: Throwable? = null,
+) : ActorException("$actorName is unavailable", cause)
 
 /**
  * Request/reply did not complete before the ask timeout elapsed.
@@ -198,7 +214,8 @@ class ActorCommandFailedException(
 /**
  * Base actor infrastructure: mailbox, loop job, startup/termination barriers, lifecycle,
  * and shutdown behavior. Concrete actors define [Command], implement [handle], and
- * optionally override [postStart] and [preStop].
+ * optionally override [postStart], [preStop], [postStop], and observability hooks for
+ * undelivered commands.
  *
  * Construction is via a suspend `spawn(...)` that waits for [awaitStarted] and returns
  * a ref; the loop is not started from `init` and is not a separate public lifecycle.
@@ -259,8 +276,10 @@ abstract class Actor<Command : Any>(
                     try {
                         handle(command)
                     } catch (t: Throwable) {
-                        // Command failure is non-fatal; actor keeps running.
-                        onUnhandledCommandFailure(command, t)
+                        // Command failure is actor-fatal by default.
+                        onCommandFailure(command, t)
+                        mailbox.close(t)
+                        throw t
                     }
                 }
             } catch (t: Throwable) {
@@ -318,15 +337,42 @@ abstract class Actor<Command : Any>(
     protected open suspend fun postStop() {}
 
     /**
-     * Called when [handle] throws. Default is non-fatal; override to complete replies
-     * exceptionally or record failures in an actor-specific way.
+     * Called when [handle] throws.
+     *
+     * Default behavior:
+     * - complete the failing reply-bearing command exceptionally with [ActorCommandFailedException]
+     * - stop the actor by rethrowing from the loop
      */
-    protected open suspend fun onUnhandledCommandFailure(
+    protected open suspend fun onCommandFailure(
         command: Command,
         cause: Throwable,
     ) {
         if (command is ReplyingCommand) {
-            command.completeExceptionally(cause)
+            command.completeExceptionally(ActorCommandFailedException(actorName, cause))
+        }
+    }
+
+    /**
+     * Called for commands accepted earlier but never delivered to [handle].
+     *
+     * Default behavior is:
+     * - if the command implements [ReplyingCommand], complete it exceptionally with
+     *   [ActorUnavailableException]
+     * - otherwise do nothing
+     *
+     * Concrete actors may override this for logging or metrics.
+     */
+    protected open fun onUndeliveredCommand(
+        command: Command,
+        reason: ActorUnavailableReason,
+    ) {
+        if (command is ReplyingCommand) {
+            command.completeExceptionally(
+                ActorUnavailableException(
+                    reason = reason,
+                    actorName = actorName,
+                ),
+            )
         }
     }
 
@@ -338,12 +384,13 @@ abstract class Actor<Command : Any>(
     }
 
     /**
-     * Non-blocking enqueue attempt used by the ref implementation.
+     * Non-blocking send.
      *
-     * Implementations should normalize mailbox closure/full races into [Result.failure]
-     * with [ActorUnavailableException] instead of leaking raw channel exceptions.
+     * Returns [Result.success] when [command] is accepted into the mailbox.
+     * Returns [Result.failure] with [ActorUnavailableException] when the actor is not
+     * accepting commands or when the mailbox cannot accept the command.
      */
-    protected fun trySend(command: Command): ChannelResult<Unit>
+    protected fun send(command: Command): Result<Unit>
 
     /**
      * Shuts down the actor.
@@ -469,6 +516,8 @@ import kotlin.time.Duration
  * [tell] or [ask]. Concrete per-actor ref subclasses are not required by the core model.
  */
 interface ActorRef<in Command : Any> {
+    val actorName: String
+
     /**
      * Sends a command without waiting for a reply.
      *
@@ -499,6 +548,10 @@ suspend fun <Command : Any, Reply> ActorRef<Command>.ask(
     build: (CompletableDeferred<Reply>) -> Command,
 ): Result<Reply> {
     val reply = CompletableDeferred<Reply>()
+    val enqueue = tell(build(reply))
+    if (enqueue.isFailure) {
+        return Result.failure(enqueue.exceptionOrNull()!!)
+    }
     return TODO("reference shape only")
 }
 ```
@@ -516,7 +569,7 @@ The actor uses:
 
 This split is intentional:
 
-- `atomic` handles read-mostly checks like `ensureAccepting()` and `trySend()`
+- `atomic` handles read-mostly checks like whether the actor is still accepting commands
 - `Mutex` makes startup and shutdown state transitions single-flight and race-safe
 
 The mutex is not used for:
@@ -544,7 +597,7 @@ The shutdown sequence is:
 1. under `lifecycleMutex`, move to `SHUTTING_DOWN`
 2. close mailbox
 3. if graceful, run `preStop()` and wait for termination
-4. if timeout expires, cancel the loop
+4. if timeout expires, fail pending queued commands as undelivered and cancel the loop
 5. in the loop `finally`, publish `SHUTDOWN`
 6. run `postStop()`
 7. complete `terminated`
@@ -572,16 +625,26 @@ If an actor does not need true post-termination cleanup, it can ignore `postStop
 
 Default rule:
 
-- one failing command must not kill the actor unless the actor explicitly chooses that behavior
+- a throwable escaping [handle] is actor-fatal by default
 
 Implementation:
 
 - each mailbox dispatch is wrapped in `try/catch`
-- the base default is non-fatal
-- if the command implements `ReplyingCommand`, the base actor completes it exceptionally
+- if [handle] throws, the base actor completes the failing reply-bearing command exceptionally
+  with `ActorCommandFailedException`
+- after that, the actor stops instead of continuing with later commands
 - command failures surfaced through `ask(...)` should be wrapped as `ActorCommandFailedException`
 
-Concrete actors may still override `onUnhandledCommandFailure(...)` for domain-specific behavior.
+This is intentional.
+
+Reasoning:
+
+- once actor-owned state or resources have observed an unexpected exception, continuing to
+  process later commands is harder to reason about
+- PipeKt does not have supervision/restart semantics in the minimal actor layer
+- stopping the actor is the safer default
+
+Concrete actors may still override `onCommandFailure(...)` for domain-specific behavior before termination.
 
 ### 8.2 Startup failure
 
@@ -601,6 +664,48 @@ Rule:
 - actors are one-shot
 - once terminated, create a new actor via `spawn(...)`
 
+### 8.4 Pending messages when the actor stops
+
+When an actor stops because of shutdown or internal failure, pending commands still in the
+mailbox need an explicit policy.
+
+This design uses the following rules:
+
+- pending reply-bearing commands are failed exceptionally with `ActorUnavailableException`
+- the reason should be `ActorUnavailableReason.NOT_DELIVERED`
+- pending one-way commands are dropped
+- there is no dead-letter subsystem in the minimal actor library
+
+This means:
+
+- `tell(...)` may have returned `Result.success(Unit)` for a command that is later dropped
+- `ask(...)` must not be left suspended forever once the command has been accepted
+
+### 8.5 Observability of undelivered commands
+
+The core library should not require a dead-letter bus or logging framework.
+
+Instead, the base actor should expose a minimal observability hook:
+
+```kotlin
+protected open fun onUndeliveredCommand(
+    command: Command,
+    reason: ActorUnavailableReason,
+) {}
+```
+
+Default behavior:
+
+- if `command` implements `ReplyingCommand`, complete it exceptionally with
+  `ActorUnavailableException(reason = NOT_DELIVERED, ...)`
+- otherwise do nothing
+
+Concrete actors may override this hook to:
+
+- log dropped one-way commands
+- record metrics
+- attach actor-specific diagnostics
+
 ---
 
 ## 9. Mailbox behavior
@@ -611,7 +716,7 @@ The mailbox is finite and fail-fast by default.
 
 Default behavior:
 
-- `trySend(...)` is used internally
+- non-blocking channel send is used internally
 - if the mailbox is full, `tell(...)` / `ask(...)` return `Result.failure(ActorUnavailableException)`
 - if the actor is not accepting commands, `tell(...)` / `ask(...)` return `Result.failure(ActorUnavailableException)`
 - `tell(...)` does not suspend for mailbox space
@@ -632,6 +737,12 @@ Callers usually care about only:
 - the actor could not accept or complete the command because it was unavailable
 - the actor did not reply before the timeout
 - the actor handled the command and failed
+
+When callers need more detail about unavailability, they inspect:
+
+- `ActorUnavailableException.reason == ACTOR_CLOSED`
+- `ActorUnavailableException.reason == MAILBOX_FULL`
+- `ActorUnavailableException.reason == NOT_DELIVERED`
 
 The core library should avoid exposing more transport-specific exception types unless a
 real use case justifies them.
@@ -663,6 +774,7 @@ Canonical shape:
 
 ```kotlin
 interface ActorRef<in Command : Any> {
+    val actorName: String
     fun tell(command: Command): Result<Unit>
     suspend fun shutdown(timeout: Duration? = null)
 }
@@ -692,7 +804,7 @@ suspend fun <Command : Any> spawn(
 ): ActorRef<Command> {
     val actor = factory()
     actor.awaitStarted()
-    return actor.ref
+    return actor.self()
 }
 ```
 
@@ -811,7 +923,8 @@ Current coverage includes:
 - repeated requests before shutdown
 - shutdown rejects later requests
 - idempotent concurrent shutdown
-- reply completion on command failure
+- actor stops on command failure
+- pending reply-bearing commands fail as not-delivered when termination wins
 - shutdown during startup
 
 ---
@@ -844,6 +957,10 @@ Consumers still to migrate:
 - `tell(...)` returns `Result<Unit>`.
 - `ask(...)` returns `Result<Reply>` and always requires a timeout.
 - Public failures are compressed to unavailable / timeout / command-failed.
+- `ActorUnavailableException` carries a reason enum for closed / full / not-delivered.
+- An exception escaping `handle(...)` stops the actor.
+- Pending reply-bearing commands are failed on termination; pending one-way commands are dropped.
+- The base actor exposes an undelivered-command hook instead of a dead-letter subsystem.
 - No per-concrete actor ref type is required by the core model.
 - No actor system or actor context is required by the core model.
 - Reply-bearing command failures do not leave requesters suspended forever when commands opt into `ReplyingCommand`.

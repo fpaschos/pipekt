@@ -49,6 +49,10 @@ sealed interface TestCommand {
             reply.completeExceptionally(cause)
         }
     }
+
+    data class Block(
+        val gate: CompletableDeferred<Unit>,
+    ) : TestCommand
 }
 
 class MinimalActor(
@@ -96,6 +100,12 @@ class MinimalActor(
                 events.add("handle:slow-ping:${command.value}:end")
                 command.reply.complete("echo: ${command.value}")
             }
+
+            is TestCommand.Block -> {
+                events.add("handle:block:begin")
+                command.gate.await()
+                events.add("handle:block:end")
+            }
         }
     }
 
@@ -105,5 +115,39 @@ class MinimalActor(
 
     override suspend fun postStop() {
         events.add("postStop")
+    }
+}
+
+class RecordingActor(
+    scope: CoroutineScope,
+    name: String,
+    private val undelivered: MutableList<String>,
+) : Actor<TestCommand>(scope, name, Channel.BUFFERED) {
+    override suspend fun handle(command: TestCommand) {
+        when (command) {
+            is TestCommand.Record -> Unit
+            is TestCommand.Ping -> command.reply.complete("echo: ${command.value}")
+            is TestCommand.Snapshot -> command.reply.complete(emptyList())
+            is TestCommand.Fail -> error("boom")
+            is TestCommand.SlowPing -> command.reply.complete("echo: ${command.value}")
+            is TestCommand.Block -> Unit
+        }
+    }
+
+    override fun onUndeliveredCommand(
+        command: TestCommand,
+        reason: ActorUnavailableReason,
+    ) {
+        val label =
+            when (command) {
+                is TestCommand.Record -> "Record"
+                is TestCommand.Ping -> "Ping"
+                is TestCommand.Snapshot -> "Snapshot"
+                is TestCommand.Fail -> "Fail"
+                is TestCommand.SlowPing -> "SlowPing"
+                is TestCommand.Block -> "Block"
+            }
+        undelivered += "$label:${reason.name}"
+        super.onUndeliveredCommand(command, reason)
     }
 }
