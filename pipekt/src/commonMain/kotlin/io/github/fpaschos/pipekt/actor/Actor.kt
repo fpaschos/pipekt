@@ -28,6 +28,8 @@ internal enum class ActorLifecycle {
     SHUTDOWN,
 }
 
+private val nextActorInstanceId = atomic(0L)
+
 /**
  * Base actor infrastructure: mailbox, loop job, startup/termination barriers, lifecycle,
  * and shutdown behavior. Concrete actors define [Command], implement [handle], and
@@ -47,6 +49,9 @@ abstract class Actor<Command : Any>(
     private val actorName: String,
     capacity: Int = Channel.BUFFERED,
 ) {
+    private val actorInstanceId = nextActorInstanceId.incrementAndGet()
+    private val actorLabel = "$actorName#$actorInstanceId"
+
     /** Bounded mailbox for commands. */
     protected val mailbox = Channel<Command>(capacity)
 
@@ -64,6 +69,9 @@ abstract class Actor<Command : Any>(
             override val actorName: String
                 get() = this@Actor.actorName
 
+            override val actorLabel: String
+                get() = this@Actor.actorLabel
+
             override fun tell(command: Command): Result<Unit> = send(command)
 
             override suspend fun shutdown(timeout: Duration?) {
@@ -72,7 +80,7 @@ abstract class Actor<Command : Any>(
         }
 
     private val loopJob: Job =
-        scope.launch(CoroutineName(actorName)) {
+        scope.launch(CoroutineName(actorLabel)) {
             try {
                 // Run actor-owned startup before the actor becomes externally usable.
                 // If this throws, spawn()/awaitStarted() fail and no ref is returned.
@@ -94,7 +102,7 @@ abstract class Actor<Command : Any>(
                     // Exit without entering the mailbox drain loop; fail startup so spawn() does not hang.
                     if (!started.isCompleted) {
                         started.completeExceptionally(
-                            CancellationException("$actorName was stopped during startup"),
+                            CancellationException("$actorLabel was stopped during startup"),
                         )
                     }
                     return@launch
@@ -179,7 +187,7 @@ abstract class Actor<Command : Any>(
         cause: Throwable,
     ) {
         if (command is ReplyingCommand) {
-            command.completeExceptionally(ActorCommandFailedException(actorName, cause))
+            command.completeExceptionally(ActorCommandFailedException(actorLabel, cause))
         }
     }
 
@@ -197,7 +205,7 @@ abstract class Actor<Command : Any>(
             command.completeExceptionally(
                 ActorUnavailableException(
                     reason = reason,
-                    actorName = actorName,
+                    actorLabel = actorLabel,
                 ),
             )
         }
@@ -215,7 +223,7 @@ abstract class Actor<Command : Any>(
             return Result.failure(
                 ActorUnavailableException(
                     reason = ActorUnavailableReason.ACTOR_CLOSED,
-                    actorName = actorName,
+                    actorLabel = actorLabel,
                 ),
             )
         }
@@ -227,7 +235,7 @@ abstract class Actor<Command : Any>(
             Result.failure(
                 ActorUnavailableException(
                     reason = ActorUnavailableReason.MAILBOX_FULL,
-                    actorName = actorName,
+                    actorLabel = actorLabel,
                     cause = result.exceptionOrNull(),
                 ),
             )

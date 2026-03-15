@@ -83,6 +83,24 @@ Design constraints:
 - actors are modeled as classes, not returned behaviors
 - child actor creation, if needed later, should build on the same generic `spawn(...)` primitive rather than a required context object
 
+### 4.1 Naming model
+
+Actor naming is intentionally lightweight.
+
+The model distinguishes:
+
+- `actorName`: caller-provided semantic name such as `pipeline-orchestrator`
+- `actorLabel`: process-local unique diagnostic label such as `pipeline-orchestrator#7`
+
+Rules:
+
+- `actorName` is not globally unique
+- multiple actor instances may share the same semantic name
+- `actorLabel` is generated internally from a process-local counter
+- `actorLabel` is used for coroutine names, error messages, and diagnostics
+
+This avoids a global actor registry while still keeping diagnostics unambiguous.
+
 ---
 
 ## 5. Lifecycle model
@@ -191,25 +209,25 @@ enum class ActorUnavailableReason {
 
 class ActorUnavailableException(
     val reason: ActorUnavailableReason,
-    actorName: String,
+    actorLabel: String,
     cause: Throwable? = null,
-) : ActorException("$actorName is unavailable", cause)
+) : ActorException("$actorLabel is unavailable", cause)
 
 /**
  * Request/reply did not complete before the ask timeout elapsed.
  */
 class ActorAskTimeoutException(
-    actorName: String,
+    actorLabel: String,
     timeout: Duration,
-) : ActorException("$actorName did not reply within $timeout")
+) : ActorException("$actorLabel did not reply within $timeout")
 
 /**
  * Actor command handling failed after the command was accepted.
  */
 class ActorCommandFailedException(
-    actorName: String,
+    actorLabel: String,
     cause: Throwable,
-) : ActorException("$actorName command failed", cause)
+) : ActorException("$actorLabel command failed", cause)
 
 /**
  * Base actor infrastructure: mailbox, loop job, startup/termination barriers, lifecycle,
@@ -230,6 +248,9 @@ abstract class Actor<Command : Any>(
     private val actorName: String,
     capacity: Int = Channel.BUFFERED,
 ) {
+    private val actorInstanceId = nextActorInstanceId.incrementAndGet()
+    private val actorLabel = "$actorName#$actorInstanceId"
+
     /** Bounded mailbox for commands. */
     protected val mailbox = Channel<Command>(capacity)
 
@@ -517,6 +538,7 @@ import kotlin.time.Duration
  */
 interface ActorRef<in Command : Any> {
     val actorName: String
+    val actorLabel: String
 
     /**
      * Sends a command without waiting for a reply.
@@ -775,6 +797,7 @@ Canonical shape:
 ```kotlin
 interface ActorRef<in Command : Any> {
     val actorName: String
+    val actorLabel: String
     fun tell(command: Command): Result<Unit>
     suspend fun shutdown(timeout: Duration? = null)
 }
@@ -791,6 +814,11 @@ The same rule applies to actor-to-actor communication:
 
 - one actor talks to another only through `ActorRef<Command>`
 - actors do not call each other's internal methods directly
+
+Diagnostic identity rules:
+
+- `actorName` is semantic and may collide across instances
+- `actorLabel` is process-local unique and should be used in logs and errors
 
 ---
 
@@ -958,6 +986,8 @@ Consumers still to migrate:
 - `ask(...)` returns `Result<Reply>` and always requires a timeout.
 - Public failures are compressed to unavailable / timeout / command-failed.
 - `ActorUnavailableException` carries a reason enum for closed / full / not-delivered.
+- Actor names are semantic labels and may collide.
+- Each actor also has a process-local unique diagnostic label of the form `name#instanceId`.
 - An exception escaping `handle(...)` stops the actor.
 - Pending reply-bearing commands are failed on termination; pending one-way commands are dropped.
 - The base actor exposes an undelivered-command hook instead of a dead-letter subsystem.

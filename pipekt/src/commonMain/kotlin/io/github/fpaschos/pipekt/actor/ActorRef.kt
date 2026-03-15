@@ -33,25 +33,25 @@ enum class ActorUnavailableReason {
 
 class ActorUnavailableException(
     val reason: ActorUnavailableReason,
-    actorName: String,
+    actorLabel: String,
     cause: Throwable? = null,
-) : ActorException("$actorName is unavailable", cause)
+) : ActorException("$actorLabel is unavailable", cause)
 
 /**
  * Request/reply did not complete before the timeout elapsed.
  */
 class ActorAskTimeoutException(
-    actorName: String,
+    actorLabel: String,
     timeout: Duration,
-) : ActorException("$actorName did not reply within $timeout")
+) : ActorException("$actorLabel did not reply within $timeout")
 
 /**
  * Actor command handling failed after the command was accepted.
  */
 class ActorCommandFailedException(
-    actorName: String,
+    actorLabel: String,
     cause: Throwable,
-) : ActorException("$actorName command failed", cause)
+) : ActorException("$actorLabel command failed", cause)
 
 /**
  * Generic typed handle to an actor.
@@ -60,7 +60,15 @@ class ActorCommandFailedException(
  * instance or mailbox directly.
  */
 interface ActorRef<in Command : Any> {
+    /**
+     * Semantic caller-provided name. This is not guaranteed to be globally unique.
+     */
     val actorName: String
+
+    /**
+     * Process-local unique diagnostic label derived from [actorName], e.g. `worker#7`.
+     */
+    val actorLabel: String
 
     /**
      * Sends [command] to the target actor without waiting for a reply.
@@ -96,7 +104,7 @@ suspend fun <Command : Any, Reply> ActorRef<Command>.ask(
     return try {
         Result.success(withTimeout(timeout) { reply.await() })
     } catch (_: TimeoutCancellationException) {
-        val timeoutException = ActorAskTimeoutException(actorName, timeout)
+        val timeoutException = ActorAskTimeoutException(actorLabel, timeout)
         reply.cancel()
         Result.failure(timeoutException)
     } catch (t: Throwable) {

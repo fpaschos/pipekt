@@ -5,6 +5,7 @@ import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.result.shouldBeFailure
 import io.kotest.matchers.result.shouldBeSuccess
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineName
@@ -50,6 +51,26 @@ class ActorTest :
 
                 ref.ask(1.seconds) { reply -> TestCommand.Ping("hello", reply) }.shouldBeSuccess("echo: hello")
                 ref.shutdown()
+            }
+        }
+
+        test("actors may share a semantic name but have distinct diagnostic labels") {
+            runTest(StandardTestDispatcher()) {
+                val scope = CoroutineScope(coroutineContext + SupervisorJob() + CoroutineName("test-actor-scope"))
+                // Names are semantic labels, not global identities. The actor runtime should
+                // therefore keep the caller-provided name while generating unique labels for
+                // diagnostics and coroutine naming.
+                val first = spawn { MinimalActor(scope, "shared-name") }
+                val second = spawn { MinimalActor(scope, "shared-name") }
+
+                first.actorName shouldBe "shared-name"
+                second.actorName shouldBe "shared-name"
+                first.actorLabel.startsWith("shared-name#") shouldBe true
+                second.actorLabel.startsWith("shared-name#") shouldBe true
+                first.actorLabel shouldNotBe second.actorLabel
+
+                first.shutdown()
+                second.shutdown()
             }
         }
 
@@ -147,7 +168,8 @@ class ActorTest :
                         ref.ask(1.seconds) { reply -> TestCommand.Ping("after", reply) }
                     }
 
-                // Run both enqueues and the ensuing actor failure to completion.
+                // Run both enqueues and the ensuing actor failure to completion so the test can
+                // assert both the direct command failure and the dropped queued ask.
                 advanceUntilIdle()
 
                 val failCause = failureAsk.await().shouldBeFailure()
@@ -164,6 +186,7 @@ class ActorTest :
                 val gate = CompletableDeferred<Unit>()
                 val ref = spawn { MinimalActor(scope, "forced-shutdown-actor") }
 
+                // Block the actor inside handle() so later commands stay queued in the mailbox.
                 ref.tell(TestCommand.Block(gate)).shouldBeSuccess(Unit)
                 val pendingAsk =
                     async {
@@ -194,6 +217,8 @@ class ActorTest :
             runTest(StandardTestDispatcher()) {
                 val scope = CoroutineScope(coroutineContext + SupervisorJob() + CoroutineName("test-actor-scope"))
                 val undelivered = mutableListOf<String>()
+                // RecordingActor overrides the undelivered hook so the test can assert what the
+                // base actor drops when a previously accepted one-way command never reaches handle().
                 val ref = spawn { RecordingActor(scope, "recording-actor", undelivered) }
 
                 ref.tell(TestCommand.Fail(CompletableDeferred())).shouldBeSuccess(Unit)
