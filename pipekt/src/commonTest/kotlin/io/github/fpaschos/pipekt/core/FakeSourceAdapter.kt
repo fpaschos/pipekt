@@ -1,7 +1,7 @@
 package io.github.fpaschos.pipekt.core
 
 /**
- * In-memory [SourceAdapter] test double for use in [io.github.fpaschos.pipekt.runtime.PipelineRuntime] happy-path tests.
+ * In-memory [SourceAdapter] test double for runtime and orchestrator tests.
  *
  * Holds a pre loaded queue of [SourceRecord]s. [poll] drains from the front up to [maxItems].
  * [ack] and [nack] record the ids of acknowledged/nacked records so tests can assert on

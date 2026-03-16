@@ -6,7 +6,6 @@ These documents are the active source of truth for the new parallel `streams` li
 
 - [streams-current-state-and-legacy-boundary.md](plans/streams-current-state-and-legacy-boundary.md)
 - [streams-core-architecture.md](plans/streams-core-architecture.md)
-- [streams-kotlin-flow-boundary.md](plans/streams-kotlin-flow-boundary.md)
 - [streams-contracts-v1.md](plans/streams-contracts-v1.md)
 - [streams-loyalty-reference-flow.md](plans/streams-loyalty-reference-flow.md)
 - [streams-delivery-phases.md](plans/streams-delivery-phases.md)
@@ -16,6 +15,10 @@ These documents are the active source of truth for the new parallel `streams` li
 - [minimal-actors.md](plans/minimal-actors.md)
 
 Read them in that order. `streams-delivery-additions.md` supplements `streams-delivery-phases.md` with critical fixes, architecture decisions, and the Postgres schema reference — read it alongside or immediately after the phases doc. `streams-technical-requirements.md` covers orthogonal runtime concerns (default values, error handling, DB performance, pipeline registry, and code organization) — read it before implementing Phase 2 or application wiring.
+
+## Runtime-Local Notes
+
+- [actor-based-runtime.md](/Users/fpaschos/Dev/pipekt/pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/runtime/new/actor-based-runtime.md) — actor ownership model for the `runtime.new` rewrite
 
 ## Folder Layout
 

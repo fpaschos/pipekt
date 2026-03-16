@@ -2,9 +2,11 @@
 
 **Purpose:** Plan for refactoring the pipeline runtime around an **orchestrator**, clearer ownership, universal watchdog, and DSL ergonomics. This document captures findings from design discussion and will guide implementation.
 
-**Status:** Planning. Not yet implemented.
+**Status:** Superseded in part by the actor-based runtime architecture. This document now records the old-code problems and the constraints the new design must satisfy.
 
-**Related:** [streams-contracts-v1.md](streams-contracts-v1.md), [streams-technical-requirements.md](streams-technical-requirements.md), [streams-delivery-phases.md](streams-delivery-phases.md).
+**Related:** [actor-based-runtime.md](/Users/fpaschos/Dev/pipekt/pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/runtime/new/actor-based-runtime.md), [streams-contracts-v1.md](streams-contracts-v1.md), [streams-technical-requirements.md](streams-technical-requirements.md), [streams-delivery-phases.md](streams-delivery-phases.md).
+
+**Source of truth:** [actor-based-runtime.md](/Users/fpaschos/Dev/pipekt/pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/runtime/new/actor-based-runtime.md) is the active architecture reference for `runtime.new`. Where this document conflicts with it, the actor-based runtime document wins.
 
 ---
 
@@ -42,23 +44,23 @@
 ### 1.6 Initialization and self-containment
 
 - **Problem:** Initialization is unclear — who creates store, scope, runtime, and in what order. The runtime is a “worker” with many injected dependencies; no single entry point that clearly owns “run this pipeline.”
-- **Direction:** The **orchestrator** is that entry point. Caller gives a pipeline (and planVersion/config); orchestrator materializes the runtime, starts it, and returns a handle. The orchestrator owns lifecycle and concurrency (see §2).
+- **Direction:** The **orchestrator** is that entry point. Caller gives a pipeline (and planVersion/config); orchestrator materializes the runtime, starts it, and returns a `PipelineExecutable`. The orchestrator owns lifecycle and concurrency (see §2).
 
 ### 1.7 Concurrency issues (current PipelineRuntime)
 
 - **Unprotected `jobs` list:** Mutable list modified in `start()` and read/cleared in `stop()`. If `start()`/`stop()` can be called from different coroutines, concurrent modification is possible. Fix: guard with `Mutex` or move all start/stop into a single owner (the orchestrator).
 - **`runId` visibility:** `lateinit var runId` written in `start()` and read by launched coroutines on possibly different threads. Ensure safe publication (e.g. volatile or set before any launch).
 - **TOCTOU in ingestion:** `countNonTerminal` then `appendIngress` is a time-of-check-time-of-use race; backpressure is soft. Document or tighten with store support if needed.
-- **Orchestrator as actor** (see §2) centralizes start/stop/hold state so the runtime’s internal concurrency surface can be reduced or simplified.
+- **Actor-based fix:** the orchestrator actor owns process-wide registration and the runtime actor is the only owner allowed to mutate or invoke the underlying `PipelineRuntime`. `PipelineExecutable` must not bypass the orchestrator for registry mutation. This removes the old shared ownership problem instead of patching it piecemeal.
 
 ### 1.8 Orchestrator: missing component
 
-- **Gap:** There is no single component that you “give a pipeline” and get back a “runtime handle.” The plans describe a PipelineManager above the runtime but place it in the app layer; ownership and concurrency are then ad hoc.
+- **Gap:** There is no single component that you “give a pipeline” and get back a `PipelineExecutable`. The plans describe a PipelineManager above the runtime but place it in the app layer; ownership and concurrency are then ad hoc.
 - **Proposal:** Add an **orchestrator** (e.g. `PipelineOrchestrator` or `PipelineManager`) that:
   - You call with “run this pipeline” (definition + planVersion + config).
-  - It **creates** the `PipelineRuntime`, starts it, and returns a **handle** (e.g. `RuntimeHandle` with `stop()`, maybe `runId` or status).
-  - It **holds** active pipelines (e.g. map of name or handle → runtime + job).
-  - It is implemented as a **self-contained actor**: one coroutine, one channel (or mutex), so all operations (start, stop, list) are serialized. No shared mutable state visible to callers; the actor owns the map and lifecycle.
+  - It **creates** the `PipelineRuntime`, starts it, and returns a `PipelineExecutable`.
+  - It **holds** active pipelines and is the only owner of the active-runtime registry.
+  - It is implemented as a **self-contained actor** so all operations (start, stop, list, inspect) are serialized. No shared mutable state is visible to callers.
   - It runs **one** store-level watchdog (one loop for the store), so the runtime no longer owns a watchdog.
 - This orchestrator **belongs in this library**: it only needs `PipelineDefinition`, `DurableStore`, `PayloadSerializer`, `RuntimeConfig`, and a scope. It materializes and holds active pipelines for the environment; every consumer uses the same type.
 
@@ -67,15 +69,18 @@
 - **Goal:** From the DSL, express “pipeline start” naturally.
 - **Chosen approach: receiver.** Use a receiver so that inside a block the pipeline definition can call `.start(...)` and the orchestrator is in scope, e.g.:
   ```kotlin
-  with(orchestrator) {
-      pipeline<Msg>("my-pipe", maxInFlight = 100) {
-          source("src", adapter)
-          step<Msg, Msg>("step1") { it }
-      }.start(planVersion = "v1")  // extension on PipelineDefinition; uses receiver orchestrator
-  }
+  context(orchestrator: PipelineOrchestrator)
+  suspend fun PipelineDefinition.start(
+      planVersion: String,
+      config: RuntimeConfig = RuntimeConfig(),
+  ): PipelineExecutable =
+      orchestrator.startPipeline(
+          definition = this,
+          planVersion = planVersion,
+          config = config,
+      )
   ```
-  Or the orchestrator exposes a scope in which `pipeline { ... }.start(...)` resolves the orchestrator from the receiver.
-- **Alternative (not chosen for v2):** `orchestrator.pipeline<Msg>("name") { ... }` that both builds and starts and returns a handle — possible later if we want “start” fully implicit.
+- **Alternative (not chosen for v2):** `orchestrator.pipeline<Msg>("name") { ... }` that both builds and starts and returns a `PipelineExecutable` — possible later if we want “start” fully implicit.
 
 ### 1.10 Who creates the orchestrator
 
@@ -88,38 +93,39 @@
 
 ## 2. Orchestrator design (target)
 
-- **Type:** e.g. `PipelineOrchestrator` in `pipekt.runtime` (or `pipekt.orchestrator` if we introduce a package).
+- **Type:** `PipelineOrchestrator` in `pipekt.runtime.new`.
 - **Construction:** Takes **store**, **serializer**, and **scope** (or creates and owns a scope). Optionally takes **RuntimeConfig** defaults or a **watchdog** config (interval, limit).
 - **Behaviour:**
-  - **startPipeline(definition, planVersion, config): RuntimeHandle** — creates `PipelineRuntime(definition, store, serializer, scope, planVersion)`, calls `runtime.start(config)`, registers the runtime (and its jobs) in the actor’s map, returns a handle. No per-runtime watchdog; runtime has only ingestion + workers.
-  - **stop(handle)** or **handle.stop()** — sends stop to the actor; actor calls `runtime.stop()`, removes from map.
-  - **listActive()** or **handles()** — returns current handles or pipeline names (from the actor’s map).
+  - **startPipeline(definition, planVersion, config): PipelineExecutable** — creates a runtime actor for one pipeline execution, starts the underlying runtime, registers it in the actor-owned map, and returns a `PipelineExecutable`. No per-runtime watchdog; runtime has ingress plus operator workers.
+  - **stop(executable)** or **executable.stop()** — routes through the orchestrator actor; the orchestrator coordinates runtime shutdown and removes the executable from its registry.
+  - **listActive()** or **executables()** — returns current executables or pipeline names from the actor-owned map.
   - **Watchdog:** One loop (either inside the orchestrator or a small companion) that periodically calls `store.reclaimExpiredLeases(now, limit)` for the **store**. Started when the orchestrator starts; stopped when the orchestrator stops.
-- **Concurrency:** All mutations (map of runtimes, start/stop) go through a single serialized point (actor coroutine or mutex). Handles are opaque identifiers; only the orchestrator touches the runtime and job list.
+- **Concurrency:** All mutations of the active-runtime registry go through the orchestrator actor. The runtime actor is the only owner allowed to mutate or invoke the underlying `PipelineRuntime`. `PipelineExecutable` is a capability object, not a second mutable owner.
 
 ---
 
-## 3. Runtime handle
+## 3. Pipeline executable
 
-- **RuntimeHandle** (or similar): Opaque or minimal type returned by `startPipeline(...)`.
-  - **stop()** — request the orchestrator to stop this pipeline (suspend until stopped).
+- **PipelineExecutable**: Opaque or minimal type returned by `startPipeline(...)`.
+  - **stop()** — request the orchestrator to stop this pipeline; registry mutation still goes through the orchestrator actor.
   - Optionally: **runId**, **pipelineName**, or **status** for observability.
-  - No direct access to `PipelineRuntime`; the handle is the only reference the caller holds.
+  - No direct access to `PipelineRuntime`; the executable is the only reference the caller holds.
+  - It is not an actor and does not own mutable runtime state.
 
 ---
 
 ## 4. PipelineRuntime changes (v2)
 
 - **Remove** the watchdog loop from `PipelineRuntime`. Document that reclaim is the orchestrator’s (or store’s) responsibility.
-- **Keep** ingestion loop and worker loops in `PipelineRuntime`. Runtime remains the execution engine; orchestrator owns lifecycle and the set of active runtimes.
-- **Optional:** Simplify internal concurrency (e.g. protect `jobs` with a mutex, or document that only the orchestrator may call start/stop so that single-threaded use is guaranteed). Prefer orchestrator as the single caller of start/stop so that the runtime’s concurrency surface is minimal.
+- **Keep** ingestion loop and worker loops in `PipelineRuntime`, but place them under actor ownership. The runtime remains the execution engine; the runtime actor owns its lifecycle and the orchestrator owns the set of active runtimes.
+- **Rule:** only the runtime actor may mutate or invoke the underlying `PipelineRuntime`.
+- **Worker model:** the runtime actor owns worker actors for source ingestion and executable operators. The old “one runtime spawns many workers” idea remains valid, but ownership is explicit now.
 
 ---
 
 ## 5. DSL integration
 
-- **Extension or method:** `PipelineDefinition.start(planVersion, config): RuntimeHandle` in a context where the **receiver** is the orchestrator (e.g. `with(orchestrator) { definition.start(...) }`), or an extension that takes the orchestrator as first parameter and is used as `definition.start(orchestrator, planVersion, config)`.
-  - If receiver-based: define an interface or scope type (e.g. `PipelineOrchestratorScope`) that provides the orchestrator, and an extension `PipelineDefinition.start(planVersion, config)` that uses the receiver to call `orchestrator.startPipeline(this, planVersion, config)`.
+- **Extension or method:** `PipelineDefinition.start(planVersion, config): PipelineExecutable` in a context where the **receiver** is the orchestrator.
 - **Documentation:** Show the recommended pattern: create one orchestrator per environment (e.g. per process), then use `with(orchestrator) { pipeline { ... }.start(...) }` (or equivalent) so that “pipeline start” lives in the DSL.
 
 ---
@@ -127,19 +133,18 @@
 ## 6. Implementation order (suggested)
 
 1. **Document and refactor watchdog:** Remove watchdog loop from `PipelineRuntime`; document that the caller (orchestrator) must run one store-level `reclaimExpiredLeases` loop. Tests: ensure one external watchdog is started (e.g. by the test) so that reclaim still happens.
-2. **Introduce orchestrator and handle:** Add `PipelineOrchestrator` (or chosen name) and `RuntimeHandle` in the library. Implement as actor (or mutex-protected map). Orchestrator starts one store-level watchdog. `startPipeline(definition, planVersion, config)` creates runtime (without watchdog), starts it, returns handle; `stop(handle)` stops and removes.
-3. **Migrate tests:** PipelineRuntimeHappyPathTest (and others) create an orchestrator, call `orchestrator.startPipeline(definition, ...)` (or equivalent), and use the handle to stop. No direct `PipelineRuntime` construction in tests (or keep a few unit tests that still use the runtime directly for execution-only tests).
+2. **Introduce orchestrator and executable:** Add `PipelineOrchestrator` and `PipelineExecutable` in `runtime.new`. Implement orchestrator and runtime ownership as actors. Orchestrator starts one store-level watchdog. `startPipeline(definition, planVersion, config)` creates a runtime actor, starts it, and returns the executable; `stop(executable)` stops and removes it.
+3. **Migrate tests:** tests create an orchestrator, call `orchestrator.startPipeline(definition, ...)` or `definition.start(...)`, and use the executable to stop. No direct old-style `PipelineRuntime` construction in integration-style tests.
 4. **DSL receiver and `.start()`:** Add the receiver-based API so that `with(orchestrator) { pipeline { ... }.start(planVersion = "v1") }` (or equivalent) works. Document in user-facing docs and in this plan.
-5. **Optional:** Harden `PipelineRuntime` concurrency (mutex on `jobs`, safe publication of `runId`) if we ever allow multiple callers of start/stop; or leave as “single caller = orchestrator” and document.
+5. **Worker actor split:** move ingress and operator loops behind worker actors owned by the runtime actor.
 
 ---
 
 ## 7. Open points
 
-- **Naming:** `PipelineOrchestrator` vs `PipelineManager` vs other. Plans use “PipelineManager”; “Orchestrator” was used in discussion to stress lifecycle and actor behaviour.
 - **Scope ownership:** Does the orchestrator take a scope from the app or create its own (e.g. `CoroutineScope` + `Job` that it cancels on shutdown)? Taking a scope keeps the library flexible; creating one simplifies shutdown (cancel orchestrator’s job → all runtimes and watchdog stop).
-- **Watchdog as separate type:** Optional small type `LeaseReclaimer(store, interval, limit)` that the orchestrator starts, vs. the orchestrator just launching one loop. Either way, one loop per store.
+- **Watchdog as separate actor:** Optional small `LeaseReclaimerActor` owned by the orchestrator vs. the orchestrator directly running the reclaim loop. Either way, one serialized store-scoped owner per store.
 
 ---
 
-*Document created from design discussion; to be updated as implementation progresses.*
+*Document retained as a problem/constraints note for the old code. The active architecture for new work is the actor-based runtime document in `runtime.new`.*
