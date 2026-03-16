@@ -2,12 +2,12 @@ package io.github.fpaschos.pipekt.actor
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineName
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 class EventRecorder {
     private val events = mutableListOf<String>()
@@ -126,7 +126,9 @@ class MinimalActor(
                 command.replyTo.tell("second")
             }
 
-            TestCommand.StopSelf -> ctx.stopSelf()
+            TestCommand.StopSelf -> {
+                ctx.stopSelf()
+            }
 
             is TestCommand.SelfShutdown -> {
                 runCatching { ctx.self.shutdown() }
@@ -158,20 +160,50 @@ class RecordingActor(
         command: TestCommand,
     ) {
         when (command) {
-            is TestCommand.Record -> Unit
-            is TestCommand.Ping -> command.replyTo.tell("echo: ${command.value}")
-            is TestCommand.Snapshot -> command.replyTo.tell(emptyList())
-            is TestCommand.Fail -> error("boom")
-            is TestCommand.SlowPing -> command.replyTo.tell("echo: ${command.value}")
-            is TestCommand.Block -> Unit
-            is TestCommand.LoopName -> command.replyTo.tell(null)
+            is TestCommand.Record -> {
+                Unit
+            }
+
+            is TestCommand.Ping -> {
+                command.replyTo.tell("echo: ${command.value}")
+            }
+
+            is TestCommand.Snapshot -> {
+                command.replyTo.tell(emptyList())
+            }
+
+            is TestCommand.Fail -> {
+                error("boom")
+            }
+
+            is TestCommand.SlowPing -> {
+                command.replyTo.tell("echo: ${command.value}")
+            }
+
+            is TestCommand.Block -> {
+                Unit
+            }
+
+            is TestCommand.LoopName -> {
+                command.replyTo.tell(null)
+            }
+
             is TestCommand.DoubleReply -> {
                 command.replyTo.tell("first")
                 command.replyTo.tell("second")
             }
-            TestCommand.StopSelf -> ctx.stopSelf()
-            is TestCommand.SelfShutdown -> command.replyTo.tell("unsupported")
-            is TestCommand.CancelCurrent -> error("unsupported")
+
+            TestCommand.StopSelf -> {
+                ctx.stopSelf()
+            }
+
+            is TestCommand.SelfShutdown -> {
+                command.replyTo.tell("unsupported")
+            }
+
+            is TestCommand.CancelCurrent -> {
+                error("unsupported")
+            }
         }
     }
 
@@ -353,19 +385,6 @@ class SelfCapturingActor(
 ) : Actor<TestCommand>() {
     override suspend fun postStart(ctx: ActorContext<TestCommand>) {
         selfRef.complete(ctx.self)
-    }
-
-    override suspend fun handle(
-        ctx: ActorContext<TestCommand>,
-        command: TestCommand,
-    ) = Unit
-}
-
-class ContextLeakingActor(
-    private val leakedContext: CompletableDeferred<ActorContext<TestCommand>>,
-) : Actor<TestCommand>() {
-    override suspend fun postStart(ctx: ActorContext<TestCommand>) {
-        leakedContext.complete(ctx)
     }
 
     override suspend fun handle(

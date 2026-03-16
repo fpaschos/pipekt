@@ -22,8 +22,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
-import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.Serializable
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -199,47 +199,45 @@ class PipelineDslRuntimeTest :
                     }
                 }.shouldBeRight()
 
-            runBlocking {
-                val orchestrator =
-                    createPipelineOrchestrator(
-                        store = store,
-                        serializer = KotlinxPayloadSerializer,
+            val orchestrator =
+                createPipelineOrchestrator(
+                    store = store,
+                    serializer = KotlinxPayloadSerializer,
+                )
+
+            val executable =
+                with(orchestrator) {
+                    definition.start(
+                        planVersion = "v1",
+                        config =
+                            RuntimeConfig(
+                                workerPollInterval = 10.milliseconds,
+                                watchdogInterval = 25.milliseconds,
+                                leaseDuration = 1.seconds,
+                                workerClaimLimit = 8,
+                            ),
                     )
-
-                val executable =
-                    with(orchestrator) {
-                        definition.start(
-                            planVersion = "v1",
-                            config =
-                                RuntimeConfig(
-                                    workerPollInterval = 10.milliseconds,
-                                    watchdogInterval = 25.milliseconds,
-                                    leaseDuration = 1.seconds,
-                                    workerClaimLimit = 8,
-                                ),
-                        )
-                    }
-
-                try {
-                    waitUntil {
-                        attempts == 3
-                    }
-
-                    val run = store.findAllActiveRuns("retry-pipeline").single()
-                    waitUntil {
-                        store.countNonTerminal(run.id) == 0
-                    }
-
-                    val item = store.getWorkItemBySourceId(run.id, "s1")!!
-                    item.status shouldBe WorkItemStatus.COMPLETED
-                    item.attemptCount shouldBe 3
-                    attemptOffsetsMs.size shouldBe 3
-                    (attemptOffsetsMs[1] - attemptOffsetsMs[0] >= 120L) shouldBe true
-                    (attemptOffsetsMs[2] - attemptOffsetsMs[1] >= 120L) shouldBe true
-                } finally {
-                    executable.stop()
-                    orchestrator.shutdown()
                 }
+
+            try {
+                waitUntil {
+                    attempts == 3
+                }
+
+                val run = store.findAllActiveRuns("retry-pipeline").single()
+                waitUntil {
+                    store.countNonTerminal(run.id) == 0
+                }
+
+                val item = store.getWorkItemBySourceId(run.id, "s1")!!
+                item.status shouldBe WorkItemStatus.COMPLETED
+                item.attemptCount shouldBe 3
+                attemptOffsetsMs.size shouldBe 3
+                (attemptOffsetsMs[1] - attemptOffsetsMs[0] >= 120L) shouldBe true
+                (attemptOffsetsMs[2] - attemptOffsetsMs[1] >= 120L) shouldBe true
+            } finally {
+                executable.stop()
+                orchestrator.shutdown()
             }
         }
 
@@ -257,49 +255,51 @@ class PipelineDslRuntimeTest :
                     step<Msg, Msg>("resume-step") { msg -> Msg(msg.value.uppercase()) }
                 }.shouldBeRight()
 
-            runBlocking {
-                val run = store.findOrCreateRun("watchdog-pipeline", "v1")
-                store.appendIngress(
-                    runId = run.id,
-                    records = listOf(io.github.fpaschos.pipekt.core.IngressRecord(sourceId = "seed-1", payload = """{"value":"seed"}""")),
-                    firstStep = "resume-step",
+            val run = store.findOrCreateRun("watchdog-pipeline", "v1")
+            store.appendIngress(
+                runId = run.id,
+                records =
+                    listOf(
+                        io.github.fpaschos.pipekt.core
+                            .IngressRecord(sourceId = "seed-1", payload = """{"value":"seed"}"""),
+                    ),
+                firstStep = "resume-step",
+            )
+            val claimed = store.claim("resume-step", run.id, 1, 50.milliseconds, "stuck-worker").single()
+            claimed.status shouldBe WorkItemStatus.IN_PROGRESS
+
+            val orchestrator =
+                createPipelineOrchestrator(
+                    store = store,
+                    serializer = KotlinxPayloadSerializer,
                 )
-                val claimed = store.claim("resume-step", run.id, 1, 50.milliseconds, "stuck-worker").single()
-                claimed.status shouldBe WorkItemStatus.IN_PROGRESS
 
-                val orchestrator =
-                    createPipelineOrchestrator(
-                        store = store,
-                        serializer = KotlinxPayloadSerializer,
+            val executable =
+                with(orchestrator) {
+                    definition.start(
+                        planVersion = "v1",
+                        config =
+                            RuntimeConfig(
+                                workerPollInterval = 10.milliseconds,
+                                watchdogInterval = 10.milliseconds,
+                                leaseDuration = 1.seconds,
+                                workerClaimLimit = 8,
+                            ),
                     )
-
-                val executable =
-                    with(orchestrator) {
-                        definition.start(
-                            planVersion = "v1",
-                            config =
-                                RuntimeConfig(
-                                    workerPollInterval = 10.milliseconds,
-                                    watchdogInterval = 10.milliseconds,
-                                    leaseDuration = 1.seconds,
-                                    workerClaimLimit = 8,
-                                ),
-                        )
-                    }
-
-                try {
-                    waitUntil {
-                        store.getWorkItemBySourceId(run.id, "seed-1")?.status == WorkItemStatus.COMPLETED
-                    }
-
-                    val item = store.getWorkItemBySourceId(run.id, "seed-1")!!
-                    item.status shouldBe WorkItemStatus.COMPLETED
-                    item.payloadJson.shouldBeNull()
-                    item.attemptCount shouldBe 1
-                } finally {
-                    executable.stop()
-                    orchestrator.shutdown()
                 }
+
+            try {
+                waitUntil {
+                    store.getWorkItemBySourceId(run.id, "seed-1")?.status == WorkItemStatus.COMPLETED
+                }
+
+                val item = store.getWorkItemBySourceId(run.id, "seed-1")!!
+                item.status shouldBe WorkItemStatus.COMPLETED
+                item.payloadJson.shouldBeNull()
+                item.attemptCount shouldBe 1
+            } finally {
+                executable.stop()
+                orchestrator.shutdown()
             }
         }
     })
