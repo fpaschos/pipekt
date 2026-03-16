@@ -1,4 +1,4 @@
-package io.github.fpaschos.pipekt.runtime
+package io.github.fpaschos.pipekt.runtime.new
 
 import io.github.fpaschos.pipekt.core.PipelineDefinition
 
@@ -11,7 +11,7 @@ context(orchestrator: PipelineOrchestrator)
 suspend fun PipelineDefinition.start(
     planVersion: String,
     config: RuntimeConfig = RuntimeConfig(),
-): RuntimeHandle =
+): PipelineExecutable =
     orchestrator.startPipeline(
         definition = this,
         planVersion = planVersion,

@@ -170,7 +170,12 @@ class InMemoryStore : DurableStore {
             val now = Clock.System.now()
             val candidates =
                 items.values
-                    .filter { it.runId == runId && it.currentStep == step && it.status == WorkItemStatus.PENDING }
+                    .filter {
+                        it.runId == runId &&
+                            it.currentStep == step &&
+                            it.status == WorkItemStatus.PENDING &&
+                            (it.retryAt == null || it.retryAt <= now)
+                    }
                     .take(limit)
             val leaseExpiry = now + leaseDuration
             candidates.map { item ->
