@@ -17,8 +17,40 @@
 - [x] Removed AppendIngressResult enum from core in favor of store's bulk result type
 
 ### Phase 1C — InMemoryStore + FakeSourceAdapter (complete)
+- [x] `InMemoryStore` implements append / claim / checkpoint / backpressure / lease reclaim semantics
+- [x] `FakeSourceAdapter` exists for runtime tests
 
 ### Phase 1D — PipelineRuntime + happy-path tests (complete)
+- [x] runtime serializes ingress payloads, appends to store, and acks only after durable append
+- [x] runtime executes steps / filters and checkpoints success, filtered, and failed outcomes
+- [x] actor-backed happy-path runtime test passing
+
+### Phase 2 — Runtime And Backpressure (in progress)
+
+Implemented:
+- [x] ingestion loop separated from per-step worker loops
+- [x] ingestion uses `countNonTerminal` to cap intake by `maxInFlight`
+- [x] worker loops claim by step and checkpoint atomically through the store SPI
+- [x] retry scheduling uses `retryAt` based on `RetryPolicy`
+- [x] store-scoped lease reclaimer / watchdog loop exists
+- [x] lease reclaim is testable in-memory
+- [x] actor-backed `PipelineOrchestrator` can start / inspect / stop active runtimes
+
+Still open:
+- [ ] explicit backpressure test proving ingestion stops while slow workers hold `maxInFlight`
+- [ ] explicit retry timing test proving backoff delay between attempts
+- [ ] explicit watchdog test proving expired `IN_PROGRESS` items are reclaimed and resumed
+- [ ] per-step concurrency configuration beyond the current single worker per step
+- [ ] resume-existing-runs flow (`resumeRuns`) that reclaims leases before re-execution
+
+### Phase 3 — Durable Postgres Store (not started)
+- [ ] Postgres/sqlx4k store implementation
+- [ ] migrations / schema files
+- [ ] recovery tests against durable state
+
+### Phase 4 — AMQP Source Adapter (not started)
+
+### Phase 5 — Loyalty Reference Example (not started)
 
 ---
 

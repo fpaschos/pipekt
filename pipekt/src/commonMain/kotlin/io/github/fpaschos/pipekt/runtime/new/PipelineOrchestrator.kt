@@ -177,15 +177,7 @@ private class PipelineOrchestratorActor(
 ) : Actor<OrchestratorCommand>() {
     private val activeExecutables = linkedMapOf<String, ActivePipeline>()
     private var leaseReclaimerRef: ActorRef<LeaseReclaimerCommand>? = null
-
-    override suspend fun postStart(ctx: ActorContext<OrchestratorCommand>) {
-        val leaseRef =
-            spawn<LeaseReclaimerCommand>(name = "lease-reclaimer") {
-                LeaseReclaimerActor(store = store, config = RuntimeConfig())
-            }
-        ctx.watch(leaseRef) { termination -> OrchestratorCommand.LeaseReclaimerTerminated(termination) }
-        leaseReclaimerRef = leaseRef
-    }
+    private var leaseReclaimerConfig: RuntimeConfig? = null
 
     override suspend fun handle(
         ctx: ActorContext<OrchestratorCommand>,
@@ -243,6 +235,8 @@ private class PipelineOrchestratorActor(
             return
         }
 
+        ensureLeaseReclaimer(ctx, command.config)
+
         val runtime =
             PipelineRuntime(
                 definition = command.definition,
@@ -279,6 +273,35 @@ private class PipelineOrchestratorActor(
         active.runtimeRef.shutdown(command.timeout)
         activeExecutables.remove(command.executableId)
         command.replyTo.tell(Unit)
+    }
+
+    private suspend fun ensureLeaseReclaimer(
+        ctx: ActorContext<OrchestratorCommand>,
+        requestedConfig: RuntimeConfig,
+    ) {
+        val currentConfig = leaseReclaimerConfig
+        val mergedConfig =
+            if (currentConfig == null) {
+                requestedConfig
+            } else {
+                currentConfig.copy(
+                    watchdogInterval = minOf(currentConfig.watchdogInterval, requestedConfig.watchdogInterval),
+                    workerClaimLimit = maxOf(currentConfig.workerClaimLimit, requestedConfig.workerClaimLimit),
+                )
+            }
+
+        if (leaseReclaimerRef != null && mergedConfig == currentConfig) {
+            return
+        }
+
+        leaseReclaimerRef?.shutdown()
+        val leaseRef =
+            spawn<LeaseReclaimerCommand>(name = "lease-reclaimer") {
+                LeaseReclaimerActor(store = store, config = mergedConfig)
+            }
+        ctx.watch(leaseRef) { termination -> OrchestratorCommand.LeaseReclaimerTerminated(termination) }
+        leaseReclaimerRef = leaseRef
+        leaseReclaimerConfig = mergedConfig
     }
 }
 
