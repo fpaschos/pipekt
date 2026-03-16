@@ -8,43 +8,43 @@ The source code is the single source of truth. If this file and the code disagre
 
 | Area | Current behavior |
 | --- | --- |
-| Construction | `spawn(...)` creates an actor instance, a process-local unique `label`, an internal `ActorRuntime`, and a standalone `DefaultActorRef`. |
+| Construction | `spawn(...)` creates an actor instance, a process-local unique `label`, an internal runtime, and a `DefaultActorRef`. |
 | Identity | `name` is caller-provided and not unique. `label` is `name#id` and is unique within the process. |
-| Actor shape | `Actor` defines behavior only: `postStart`, `handle`, `preStop`, `postStop`, `onCommandFailure`, and `onUndeliveredCommand`. |
-| Mailbox | The runtime uses one `Channel<MailboxEvent<Command>>`. User commands and internal watch notifications go through the same mailbox. |
-| Execution model | `handle(ctx, command)` runs on one loop coroutine. The base runtime does not execute multiple commands concurrently. |
-| Admission | `tell()` accepts work only while lifecycle is `RUNNING`. Otherwise it fails with `ActorUnavailable(ACTOR_CLOSED)`. A full open mailbox fails with `ActorUnavailable(MAILBOX_FULL)`. |
-| Startup | `postStart(ctx)` runs before lifecycle becomes `RUNNING`. `spawn(...)` waits for startup to complete successfully before returning the ref. |
-| Startup failure | If `postStart(ctx)` throws, startup fails and `spawn(...)` fails with that exception. |
-| Stop request during startup | If a stop request is observed after `postStart(ctx)` returns but before `RUNNING` is published, startup fails with a `CancellationException`, `preStop(ctx)` runs, and the actor never reaches `RUNNING`. |
-| Shutdown | `shutdown(timeout)` sends a stop signal and waits for termination. Shutdown is cooperative: it does not cancel a running handler. |
-| Shutdown sequence | When the loop handles a stop signal, it sets lifecycle to `SHUTTING_DOWN`, closes the mailbox, runs `preStop(ctx)`, then drains mailbox events. If draining exceeds the optional timeout, remaining user commands are dropped as undelivered. |
-| Mailbox closure | If the loop observes the mailbox closed and drained through `onReceiveCatching`, it moves to `SHUTTING_DOWN` and exits the loop. |
+| Execution model | `handle(ctx, command)` runs on one loop coroutine. The runtime does not execute multiple commands concurrently. |
+| User admission | `tell()` accepts work only while lifecycle is `RUNNING`. Otherwise it fails with `ActorUnavailable(ACTOR_CLOSED)`. A full mailbox fails with `ActorUnavailable(MAILBOX_FULL)`. |
+| Queues | User commands and system events are separated. User commands go through a bounded mailbox. Internal stop/watch traffic goes through an unbounded system queue. |
+| Ordering | User commands remain FIFO among themselves. Pending system events are processed before pending user commands. There is no total FIFO guarantee across the two queues. |
+| Startup | `postStart(ctx)` runs before lifecycle becomes `RUNNING`. `spawn(...)` waits for successful startup before returning the ref. |
+| Stop during startup | If stop is requested after `postStart(ctx)` returns but before `RUNNING` is published, startup fails with `CancellationException`, `preStop(ctx)` runs, and the actor never reaches `RUNNING`. |
+| Shutdown API | `shutdown(timeout)` requests stop and waits for termination. It is invalid to call it from the actor's own loop coroutine. Actor code must use `ctx.stopSelf(...)` instead. |
+| Shutdown timeout | `timeout` only bounds draining already accepted user commands after stop begins. It does not bound total termination time or interrupt the current handler. |
+| Concurrent shutdowns | First stop request wins. Later shutdown callers only wait on the same termination barrier. |
+| Shutdown sequence | When `SystemEvent.Stop` is handled, lifecycle becomes `SHUTTING_DOWN`, the user mailbox closes, `preStop(ctx)` runs, then queued user commands are drained. If drain times out, remaining queued user commands are dropped as `NOT_DELIVERED`. |
 | Termination | In `finally`, lifecycle becomes `SHUTDOWN`, `postStop(ctx)` runs, termination is published to watchers, the termination barrier completes, and the owned scope job is cancelled. |
-| Handler failure | If `handle(...)` throws, `onCommandFailure(...)` runs first, the mailbox is closed with the exception, queued user commands are reported as undelivered, and the actor terminates. |
-| Undelivered commands | Only queued `MailboxEvent.UserCommand` values are reported through `onUndeliveredCommand(ctx, command, NOT_DELIVERED)`. Queued watch notifications are discarded silently. |
-| Request/reply | `ask()` creates a deferred reply channel, builds a command, sends it with `tell()`, and waits with timeout. Success returns `Result.success(reply)`. Timeout returns `ActorAskTimeout`. |
-| Context confinement | `ActorContext.watch(...)` checks that it is called from the actor loop job. Off-loop use throws `IllegalStateException`. |
-| Watching | `watch(ref)` only accepts `DefaultActorRef` instances created by this runtime. Other refs fail immediately. |
-| Watch state | Each watched actor stores either active watcher registrations or a terminal `ActorTermination`. |
-| Watch notification timing | If `watch(ref)` is called after the target already terminated, the runtime immediately tries to enqueue a watch notification into the watcher mailbox. |
-| Watch delivery | A watch notification is delivered as an internal mailbox event. When handled, the watcher context maps it to a normal command and runs that command through `handle(...)`. |
-| Watch registration lifetime | Current watch registrations are one-shot. After a watch notification is mapped once, that registration is removed from the watcher context. |
-| Ownership model | There is no parent/child ownership API in this layer. Watching another actor does not imply lifecycle ownership. |
+| Cancellation | `CancellationException` is treated as coroutine cancellation, not command failure. The actor still terminates, but accepted requests do not become `ActorCommandFailed` just because the runtime was cancelled. |
+| Cleanup | `preStop(ctx)` and `postStop(ctx)` run in `NonCancellable`. `preStop` is executed at most once. |
+| Handler failure | If `handle(...)` throws a non-cancellation failure, `onCommandFailure(...)` runs, the current ask reply is failed with `ActorCommandFailed`, queued ask replies are failed as `NOT_DELIVERED`, and the actor terminates. |
+| Undelivered commands | Dropped queued user commands are reported through `onUndeliveredCommand(ctx, command, NOT_DELIVERED)`. If a dropped command came from external `ask()`, that caller fails with `ActorUnavailable(NOT_DELIVERED)`. |
+| Request/reply | Commands that expect a reply carry `replyTo: ReplyRef<T>`. External `ask()` creates a temporary one-shot `ReplyRef`, sends the command, and waits with timeout. The first reply wins. |
+| Actor-to-actor replies | `ActorRef<Command>` extends `ReplyRef<Command>`, so a normal actor ref can be used directly as `replyTo` when protocols line up. |
+| Watching | `watch(ref)` is loop-confined, accepts only `DefaultActorRef`, rejects self-watch, and rejects new registration while the watcher is shutting down. |
+| Watch semantics | Watches are idempotent per watcher/target pair while active. Duplicate `watch(target, ...)` calls are a no-op and keep the first mapper. |
+| Watch delivery | Successful watch registration guarantees that target termination is enqueued onto the watcher system queue instead of competing with user mailbox capacity. If the target already terminated, notification is enqueued immediately. |
+| Watch lifetime | A watch remains active until one termination notification is delivered and mapped back into a normal command. After that it is removed from the watcher context. |
+| Ownership model | There is no parent/child ownership API in this layer. Watching another actor does not imply restart or automatic lifecycle ownership. |
 
 ## Hook behavior
 
 | Hook | Current behavior |
 | --- | --- |
 | `postStart(ctx)` | Runs on the loop before `RUNNING` is published. |
-| `preStop(ctx)` | Runs on the loop when a stop signal is processed, and also on the stop-during-startup path described above. |
-| `postStop(ctx)` | Runs on the loop in the `finally` block before termination is published. |
-| `onCommandFailure(ctx, command, cause)` | Runs on the loop after `handle(...)` throws and before the actor terminates. Default behavior fails reply-bearing commands with `ActorCommandFailed`. |
-| `onUndeliveredCommand(ctx, command, reason)` | Runs when queued user commands are dropped without reaching `handle(...)`. Default behavior fails only reply-bearing commands with `ActorUnavailable`. |
+| `preStop(ctx)` | Runs once, in `NonCancellable`, when cooperative stop starts or when cancellation/failure terminates the actor. |
+| `postStop(ctx)` | Runs in `NonCancellable` from `finally` before termination is published. |
+| `onCommandFailure(ctx, command, cause)` | Runs on the loop after a non-cancellation `handle(...)` failure and before the actor terminates. Default behavior is no-op. |
+| `onUndeliveredCommand(ctx, command, reason)` | Runs when queued user commands are dropped without reaching `handle(...)`. Default behavior is no-op. |
 
 ## Notes
 
-- `shutdown(timeout)` does not guarantee that termination happens within `timeout`. The timeout only bounds the mailbox-drain block after the stop signal is processed.
-- The runtime uses `stopSignal.trySend(...)`. Multiple shutdown callers share the same termination barrier, but later stop requests may be ignored if the stop-signal channel is already full.
-- Watch notification enqueue uses `mailbox.trySend(...)` and ignores the result. If the watcher mailbox is closed or full, the notification is dropped.
-- Top-level `spawn(...)` derives its parent scope from `currentCoroutineContext()`, so parent coroutine cancellation still terminates the actor runtime.
+- `ask()` still is not mailbox backpressure. It first tries normal admission, then waits for a reply.
+- Parent coroutine cancellation still terminates spawned actors because `spawn(...)` derives ownership from `currentCoroutineContext()`.
+- Actor state is not transactional. Cancellation can leave in-memory state partially updated if a handler mutates state before a suspension point.

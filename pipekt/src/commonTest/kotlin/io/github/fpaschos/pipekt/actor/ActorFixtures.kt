@@ -4,6 +4,10 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeout
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Duration.Companion.milliseconds
 
 class EventRecorder {
     private val events = mutableListOf<String>()
@@ -22,35 +26,44 @@ sealed interface TestCommand {
 
     data class Ping(
         val value: String,
-        private val channel: ReplyChannel<String>,
-    ) : Request<String>(channel),
-        TestCommand
+        val replyTo: ReplyRef<String>,
+    ) : TestCommand
 
     data class Snapshot(
-        private val channel: ReplyChannel<List<String>>,
-    ) : Request<List<String>>(channel),
-        TestCommand
+        val replyTo: ReplyRef<List<String>>,
+    ) : TestCommand
 
     data class Fail(
-        private val channel: ReplyChannel<String>,
-    ) : Request<String>(channel),
-        TestCommand
+        val replyTo: ReplyRef<String>,
+    ) : TestCommand
 
     data class SlowPing(
         val value: String,
         val gate: CompletableDeferred<Unit>,
-        private val channel: ReplyChannel<String>,
-    ) : Request<String>(channel),
-        TestCommand
+        val replyTo: ReplyRef<String>,
+    ) : TestCommand
 
     data class Block(
         val gate: CompletableDeferred<Unit>,
     ) : TestCommand
 
     data class LoopName(
-        private val channel: ReplyChannel<String?>,
-    ) : Request<String?>(channel),
-        TestCommand
+        val replyTo: ReplyRef<String?>,
+    ) : TestCommand
+
+    data class DoubleReply(
+        val replyTo: ReplyRef<String>,
+    ) : TestCommand
+
+    data object StopSelf : TestCommand
+
+    data class SelfShutdown(
+        val replyTo: ReplyRef<String>,
+    ) : TestCommand
+
+    data class CancelCurrent(
+        val replyTo: ReplyRef<String>,
+    ) : TestCommand
 }
 
 class MinimalActor(
@@ -78,12 +91,12 @@ class MinimalActor(
 
             is TestCommand.Ping -> {
                 events.record("handle:ping:${command.value}")
-                command.success("echo: ${command.value}")
+                command.replyTo.tell("echo: ${command.value}")
             }
 
             is TestCommand.Snapshot -> {
                 events.record("handle:snapshot")
-                command.success(recorded.toList())
+                command.replyTo.tell(recorded.toList())
             }
 
             is TestCommand.Fail -> {
@@ -95,7 +108,7 @@ class MinimalActor(
                 events.record("handle:slow-ping:${command.value}:begin")
                 command.gate.await()
                 events.record("handle:slow-ping:${command.value}:end")
-                command.success("echo: ${command.value}")
+                command.replyTo.tell("echo: ${command.value}")
             }
 
             is TestCommand.Block -> {
@@ -105,7 +118,25 @@ class MinimalActor(
             }
 
             is TestCommand.LoopName -> {
-                command.success(currentCoroutineContext()[CoroutineName]?.name)
+                command.replyTo.tell(currentCoroutineContext()[CoroutineName]?.name)
+            }
+
+            is TestCommand.DoubleReply -> {
+                command.replyTo.tell("first")
+                command.replyTo.tell("second")
+            }
+
+            TestCommand.StopSelf -> ctx.stopSelf()
+
+            is TestCommand.SelfShutdown -> {
+                runCatching { ctx.self.shutdown() }
+                    .exceptionOrNull()
+                    ?.let { command.replyTo.tell(it.message ?: "missing") }
+            }
+
+            is TestCommand.CancelCurrent -> {
+                delay(5.seconds)
+                command.replyTo.tell("unreachable")
             }
         }
     }
@@ -128,12 +159,19 @@ class RecordingActor(
     ) {
         when (command) {
             is TestCommand.Record -> Unit
-            is TestCommand.Ping -> command.success("echo: ${command.value}")
-            is TestCommand.Snapshot -> command.success(emptyList())
+            is TestCommand.Ping -> command.replyTo.tell("echo: ${command.value}")
+            is TestCommand.Snapshot -> command.replyTo.tell(emptyList())
             is TestCommand.Fail -> error("boom")
-            is TestCommand.SlowPing -> command.success("echo: ${command.value}")
+            is TestCommand.SlowPing -> command.replyTo.tell("echo: ${command.value}")
             is TestCommand.Block -> Unit
-            is TestCommand.LoopName -> command.success(null)
+            is TestCommand.LoopName -> command.replyTo.tell(null)
+            is TestCommand.DoubleReply -> {
+                command.replyTo.tell("first")
+                command.replyTo.tell("second")
+            }
+            TestCommand.StopSelf -> ctx.stopSelf()
+            is TestCommand.SelfShutdown -> command.replyTo.tell("unsupported")
+            is TestCommand.CancelCurrent -> error("unsupported")
         }
     }
 
@@ -151,6 +189,10 @@ class RecordingActor(
                 is TestCommand.SlowPing -> "SlowPing"
                 is TestCommand.Block -> "Block"
                 is TestCommand.LoopName -> "LoopName"
+                is TestCommand.DoubleReply -> "DoubleReply"
+                TestCommand.StopSelf -> "StopSelf"
+                is TestCommand.SelfShutdown -> "SelfShutdown"
+                is TestCommand.CancelCurrent -> "CancelCurrent"
             }
         undelivered += "$label:${reason.name}"
         super.onUndeliveredCommand(ctx, command, reason)
@@ -172,32 +214,46 @@ sealed interface ChildCommand {
     data object Fail : ChildCommand
 
     data object Capture : ChildCommand
+
+    data class ReplyParent(
+        val replyTo: ReplyRef<ParentCommand>,
+    ) : ChildCommand
 }
 
 sealed interface ParentCommand {
     data class SnapshotEvents(
-        private val channel: ReplyChannel<List<String>>,
-    ) : Request<List<String>>(channel),
-        ParentCommand
+        val replyTo: ReplyRef<List<String>>,
+    ) : ParentCommand
 
     data class StopChild(
-        private val channel: ReplyChannel<Unit>,
-    ) : Request<Unit>(channel),
-        ParentCommand
+        val replyTo: ReplyRef<Unit>,
+    ) : ParentCommand
 
     data class FailChild(
-        private val channel: ReplyChannel<Unit>,
-    ) : Request<Unit>(channel),
-        ParentCommand
+        val replyTo: ReplyRef<Unit>,
+    ) : ParentCommand
 
     data class ChildObserved(
         val termination: ActorTermination,
     ) : ParentCommand
 
     data class WatchStopped(
-        private val channel: ReplyChannel<Unit>,
-    ) : Request<Unit>(channel),
-        ParentCommand
+        val replyTo: ReplyRef<Unit>,
+    ) : ParentCommand
+
+    data class WatchActive(
+        val replyTo: ReplyRef<Unit>,
+    ) : ParentCommand
+
+    data class TriggerChildReply(
+        val replyTo: ReplyRef<Unit>,
+    ) : ParentCommand
+
+    data class Block(
+        val gate: CompletableDeferred<Unit>,
+    ) : ParentCommand
+
+    data object ChildReply : ParentCommand
 }
 
 class ChildActor(
@@ -210,6 +266,7 @@ class ChildActor(
         when (command) {
             ChildCommand.Fail -> error("child-boom")
             ChildCommand.Capture -> events.record("child:capture")
+            is ChildCommand.ReplyParent -> command.replyTo.tell(ParentCommand.ChildReply)
         }
     }
 
@@ -222,7 +279,8 @@ class ParentActor(
     private val events: EventRecorder,
     private val childRef: CompletableDeferred<ActorRef<ChildCommand>>? = null,
     private val selfRef: CompletableDeferred<ActorRef<ParentCommand>>? = null,
-) : Actor<ParentCommand>(Channel.BUFFERED) {
+    capacity: Int = Channel.BUFFERED,
+) : Actor<ParentCommand>(capacity) {
     private lateinit var child: ActorRef<ChildCommand>
 
     override suspend fun postStart(ctx: ActorContext<ParentCommand>) {
@@ -238,17 +296,17 @@ class ParentActor(
     ) {
         when (command) {
             is ParentCommand.SnapshotEvents -> {
-                command.success(events.snapshot())
+                command.replyTo.tell(events.snapshot())
             }
 
             is ParentCommand.StopChild -> {
                 child.shutdown()
-                command.success(Unit)
+                command.replyTo.tell(Unit)
             }
 
             is ParentCommand.FailChild -> {
                 child.tell(ChildCommand.Fail).getOrThrow()
-                command.success(Unit)
+                command.replyTo.tell(Unit)
             }
 
             is ParentCommand.ChildObserved -> {
@@ -258,7 +316,27 @@ class ParentActor(
 
             is ParentCommand.WatchStopped -> {
                 ctx.watch(child) { ParentCommand.ChildObserved(it) }
-                command.success(Unit)
+                command.replyTo.tell(Unit)
+            }
+
+            is ParentCommand.WatchActive -> {
+                ctx.watch(child) { ParentCommand.ChildObserved(it) }
+                command.replyTo.tell(Unit)
+            }
+
+            is ParentCommand.TriggerChildReply -> {
+                child.tell(ChildCommand.ReplyParent(ctx.self)).getOrThrow()
+                command.replyTo.tell(Unit)
+            }
+
+            is ParentCommand.Block -> {
+                events.record("parent:block:begin")
+                command.gate.await()
+                events.record("parent:block:end")
+            }
+
+            ParentCommand.ChildReply -> {
+                events.record("parent:child-reply")
             }
         }
     }
@@ -307,4 +385,94 @@ class ForeignWatchingActor(
         ctx: ActorContext<TestCommand>,
         command: TestCommand,
     ) = Unit
+}
+
+class SelfWatchingActor : Actor<TestCommand>() {
+    override suspend fun postStart(ctx: ActorContext<TestCommand>) {
+        ctx.watch(ctx.self) { TestCommand.Record(it.actorLabel) }
+    }
+
+    override suspend fun handle(
+        ctx: ActorContext<TestCommand>,
+        command: TestCommand,
+    ) = Unit
+}
+
+class WatchDuringShutdownActor(
+    private val target: ActorRef<TestCommand>,
+    private val failure: CompletableDeferred<Throwable>,
+) : Actor<TestCommand>() {
+    override suspend fun preStop(ctx: ActorContext<TestCommand>) {
+        runCatching {
+            ctx.watch(target) { TestCommand.Record(it.actorLabel) }
+        }.exceptionOrNull()?.let { failure.complete(it) }
+    }
+
+    override suspend fun handle(
+        ctx: ActorContext<TestCommand>,
+        command: TestCommand,
+    ) = Unit
+}
+
+class CancellationCleanupActor(
+    private val events: EventRecorder,
+    private val gate: CompletableDeferred<Unit>,
+) : Actor<TestCommand>() {
+    override suspend fun handle(
+        ctx: ActorContext<TestCommand>,
+        command: TestCommand,
+    ) {
+        when (command) {
+            is TestCommand.Block -> gate.await()
+            else -> Unit
+        }
+    }
+
+    override suspend fun preStop(ctx: ActorContext<TestCommand>) {
+        events.record("preStop:begin")
+        withTimeout(1.seconds) {
+            delay(10.milliseconds)
+        }
+        events.record("preStop:end")
+    }
+
+    override suspend fun postStop(ctx: ActorContext<TestCommand>) {
+        events.record("postStop:begin")
+        withTimeout(1.seconds) {
+            delay(10.milliseconds)
+        }
+        events.record("postStop:end")
+    }
+}
+
+class FailingTeardownActor(
+    private val events: EventRecorder,
+    private val gate: CompletableDeferred<Unit>,
+    private val failPreStop: Boolean = false,
+    private val failPostStop: Boolean = false,
+) : Actor<TestCommand>() {
+    override suspend fun handle(
+        ctx: ActorContext<TestCommand>,
+        command: TestCommand,
+    ) {
+        when (command) {
+            is TestCommand.Fail -> error("primary-boom")
+            is TestCommand.Block -> gate.await()
+            else -> Unit
+        }
+    }
+
+    override suspend fun preStop(ctx: ActorContext<TestCommand>) {
+        events.record("preStop")
+        if (failPreStop) {
+            error("preStop-boom")
+        }
+    }
+
+    override suspend fun postStop(ctx: ActorContext<TestCommand>) {
+        events.record("postStop")
+        if (failPostStop) {
+            error("postStop-boom")
+        }
+    }
 }

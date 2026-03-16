@@ -2,6 +2,7 @@ package io.github.fpaschos.pipekt.actor
 
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.result.shouldBeSuccess
+import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.types.shouldBeInstanceOf
@@ -45,7 +46,7 @@ class ActorSpawnScopeTest :
                         MinimalActor()
                     }
 
-                ref.ask(1.seconds) { replyTo -> TestCommand.LoopName(replyTo) }.shouldBeSuccess(ref.label)
+                ref.ask<TestCommand, String?>(1.seconds) { replyTo -> TestCommand.LoopName(replyTo) }.shouldBeSuccess(ref.label)
 
                 ref.shutdown()
             }
@@ -62,6 +63,19 @@ class ActorSpawnScopeTest :
                 val fromContext = selfRef.await()
                 fromContext.name shouldBe ref.name
                 fromContext.label shouldBe ref.label
+
+                ref.shutdown()
+            }
+        }
+
+        test("self shutdown through ActorRef fails fast") {
+            runTest {
+                val ref = spawn("self-shutdown-guard") { MinimalActor() }
+
+                ref
+                    .ask(1.seconds) { replyTo -> TestCommand.SelfShutdown(replyTo) }
+                    .shouldBeSuccess()
+                    .shouldContain("cannot call shutdown() on itself")
 
                 ref.shutdown()
             }

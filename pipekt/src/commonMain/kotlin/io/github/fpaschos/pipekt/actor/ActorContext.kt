@@ -1,7 +1,9 @@
 package io.github.fpaschos.pipekt.actor
 
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
+import kotlin.time.Duration
 
 /**
  * Loop-confined runtime capability surface exposed to concrete actors.
@@ -65,6 +67,11 @@ interface ActorContext<Command : Any> {
         actor: ActorRef<*>,
         onTerminated: (ActorTermination) -> Command,
     )
+
+    /**
+     * Requests cooperative shutdown for the current actor without waiting for termination.
+     */
+    suspend fun stopSelf(timeout: Duration? = null)
 }
 
 internal class DefaultActorContext<Command : Any>(
@@ -73,11 +80,12 @@ internal class DefaultActorContext<Command : Any>(
     override val self: ActorRef<Command>,
     private val runtime: ActorRuntime<Command>,
 ) : ActorContext<Command> {
-    private val watchMappers = mutableMapOf<Long, (ActorTermination) -> Command>()
+    private val watchMappers = mutableMapOf<Long, Pair<ActorRuntime<*>, (ActorTermination) -> Command>>()
+    private val watchedActors = mutableMapOf<ActorRuntime<*>, Long>()
     private var nextWatchToken: Long = 0
 
     override suspend fun guardActorAccess() {
-        check(currentCoroutineContext()[Job] === runtime.loopJob) {
+        check(currentCoroutineContext()[ActorLoopContext]?.runtime === runtime) {
             "This method must only be called only within actor $label coroutine."
         }
     }
@@ -92,13 +100,35 @@ internal class DefaultActorContext<Command : Any>(
             actor as? DefaultActorRef<*>
                 ?: error("Only actor refs created by this runtime can be watched.")
 
+        check(target.runtime !== runtime) { "Actor $label cannot watch itself." }
+        check(runtime.canRegisterWatches()) { "Actor $label cannot register new watches while shutting down." }
+        if (watchedActors.containsKey(target.runtime)) {
+            return
+        }
+
         val token = ++nextWatchToken
-        watchMappers[token] = onTerminated
+        watchMappers[token] = target.runtime to onTerminated
+        watchedActors[target.runtime] = token
         target.runtime.registerWatcher(runtime, token)
+    }
+
+    override suspend fun stopSelf(timeout: Duration?) {
+        guardActorAccess()
+        runtime.requestStop(timeout)
     }
 
     internal fun dispatchWatchNotification(
         token: Long,
         termination: ActorTermination,
-    ): Command? = watchMappers.remove(token)?.invoke(termination)
+    ): Command? {
+        val (target, mapper) = watchMappers.remove(token) ?: return null
+        watchedActors.remove(target)
+        return mapper(termination)
+    }
+}
+
+internal class ActorLoopContext(
+    val runtime: ActorRuntime<*>,
+) : AbstractCoroutineContextElement(Key) {
+    companion object Key : CoroutineContext.Key<ActorLoopContext>
 }

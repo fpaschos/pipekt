@@ -3,48 +3,48 @@ package io.github.fpaschos.pipekt.actor
 import kotlinx.coroutines.CompletableDeferred
 
 /**
- * Small request/reply transport used by actor commands.
- *
- * Command protocols see only this abstraction; the deferred used by [ask] stays internal to the
- * actor package.
+ * Narrow typed sink for request/reply protocols.
  */
-interface ReplyChannel<in Reply> {
-    fun success(value: Reply): Boolean
+interface ReplyRef<in Reply> {
+    fun tell(reply: Reply): Result<Unit>
 
-    fun failure(cause: Throwable): Boolean
+    fun fail(cause: Throwable): Result<Unit> = Result.failure(
+        UnsupportedOperationException("This reply ref does not support failure delivery."),
+    )
 }
 
-/**
- * Marker for commands that carry a shared reply transport.
- */
-interface ReplyRequest<Reply> {
-    val replyTo: ReplyChannel<Reply>
+internal interface AskReplyHandle {
+    fun completeFailure(cause: Throwable): Boolean
+
+    fun cancel()
 }
 
-/**
- * Shared base class for request commands so each message does not need to reimplement failure
- * plumbing.
- */
-abstract class Request<Reply>(
-    final override val replyTo: ReplyChannel<Reply>,
-) : ReplyRequest<Reply> {
-    fun success(value: Reply): Boolean = replyTo.success(value)
-
-    fun failure(cause: Throwable): Boolean = replyTo.failure(cause)
-}
-
-internal class DeferredReplyChannel<Reply> : ReplyChannel<Reply> {
+internal class DeferredReplyRef<Reply> :
+    ReplyRef<Reply>,
+    AskReplyHandle {
     private val deferred = CompletableDeferred<Reply>()
 
-    override fun success(value: Reply): Boolean = deferred.complete(value)
+    override fun tell(reply: Reply): Result<Unit> =
+        if (deferred.complete(reply)) {
+            Result.success(Unit)
+        } else {
+            Result.failure(IllegalStateException("Reply already completed."))
+        }
 
-    override fun failure(cause: Throwable): Boolean = deferred.completeExceptionally(cause)
+    override fun fail(cause: Throwable): Result<Unit> =
+        if (deferred.completeExceptionally(cause)) {
+            Result.success(Unit)
+        } else {
+            Result.failure(IllegalStateException("Reply already completed."))
+        }
+
+    override fun completeFailure(cause: Throwable): Boolean = deferred.completeExceptionally(cause)
 
     suspend fun await(): Reply = deferred.await()
 
-    fun cancel() {
+    override fun cancel() {
         deferred.cancel()
     }
 }
 
-internal fun <Reply> deferredReplyChannel(): DeferredReplyChannel<Reply> = DeferredReplyChannel()
+internal fun <Reply> deferredReplyRef(): DeferredReplyRef<Reply> = DeferredReplyRef()

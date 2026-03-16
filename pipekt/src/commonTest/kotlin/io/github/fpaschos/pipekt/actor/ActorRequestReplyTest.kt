@@ -15,7 +15,7 @@ import kotlin.time.Duration.Companion.seconds
 @OptIn(ExperimentalCoroutinesApi::class)
 class ActorRequestReplyTest :
     FunSpec({
-        test("typed refs support tell and ask through the shared reply channel") {
+        test("typed refs support tell and ask through replyTo refs") {
             runTest {
                 val ref = spawn("tell-ask-actor") { MinimalActor() }
 
@@ -28,6 +28,16 @@ class ActorRequestReplyTest :
                     .ask(1.seconds) { replyTo -> TestCommand.Snapshot(replyTo) }
                     .shouldBeSuccess()
                     .shouldContainExactly("a", "b")
+
+                ref.shutdown()
+            }
+        }
+
+        test("temporary ask reply refs are one-shot") {
+            runTest {
+                val ref = spawn("double-reply-actor") { MinimalActor() }
+
+                ref.ask(1.seconds) { replyTo -> TestCommand.DoubleReply(replyTo) }.shouldBeSuccess("first")
 
                 ref.shutdown()
             }

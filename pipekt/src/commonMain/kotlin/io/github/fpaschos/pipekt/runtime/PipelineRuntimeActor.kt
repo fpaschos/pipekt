@@ -2,8 +2,7 @@ package io.github.fpaschos.pipekt.runtime
 
 import io.github.fpaschos.pipekt.actor.Actor
 import io.github.fpaschos.pipekt.actor.ActorContext
-import io.github.fpaschos.pipekt.actor.ReplyChannel
-import io.github.fpaschos.pipekt.actor.Request
+import io.github.fpaschos.pipekt.actor.ReplyRef
 import io.github.fpaschos.pipekt.core.PayloadSerializer
 import io.github.fpaschos.pipekt.core.PipelineDefinition
 import io.github.fpaschos.pipekt.store.DurableStore
@@ -14,9 +13,8 @@ import kotlinx.coroutines.currentCoroutineContext
 
 internal sealed interface RuntimeCommand {
     class Snapshot(
-        replyTo: ReplyChannel<PipelineSnapshot>,
-    ) : Request<PipelineSnapshot>(replyTo),
-        RuntimeCommand
+        val replyTo: ReplyRef<PipelineSnapshot>,
+    ) : RuntimeCommand
 }
 
 internal class PipelineRuntimeActor(
@@ -59,7 +57,7 @@ internal class PipelineRuntimeActor(
     ) {
         when (command) {
             is RuntimeCommand.Snapshot ->
-                command.success(
+                command.replyTo.tell(
                     PipelineSnapshot(
                         pipelineName = pipeline.name,
                         planVersion = planVersion,

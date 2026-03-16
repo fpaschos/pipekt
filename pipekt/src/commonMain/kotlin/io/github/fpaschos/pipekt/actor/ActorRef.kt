@@ -65,12 +65,12 @@ data class ActorTermination(
 /**
  * Generic typed handle to an actor.
  */
-interface ActorRef<in Command : Any> {
+interface ActorRef<in Command : Any> : ReplyRef<Command> {
     val name: String
 
     val label: String
 
-    fun tell(command: Command): Result<Unit>
+    override fun tell(command: Command): Result<Unit>
 
     suspend fun shutdown(timeout: Duration? = null)
 }
@@ -93,10 +93,15 @@ data class DefaultActorRef<Command : Any> internal constructor(
  */
 suspend fun <Command : Any, Reply> ActorRef<Command>.ask(
     timeout: Duration,
-    block: (ReplyChannel<Reply>) -> Command,
+    block: (ReplyRef<Reply>) -> Command,
 ): Result<Reply> {
-    val reply = deferredReplyChannel<Reply>()
-    val enqueue = tell(block(reply))
+    val reply = deferredReplyRef<Reply>()
+    val command = block(reply)
+    val enqueue =
+        (this as? DefaultActorRef<Command>)
+            ?.runtime
+            ?.send(command, reply)
+            ?: tell(command)
     if (enqueue.isFailure) {
         return Result.failure(enqueue.exceptionOrNull()!!)
     }

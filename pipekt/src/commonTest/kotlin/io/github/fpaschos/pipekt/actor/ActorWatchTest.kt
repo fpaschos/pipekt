@@ -65,6 +65,35 @@ class ActorWatchTest :
             }
         }
 
+        test("duplicate watch registration for a live actor is idempotent") {
+            runTest {
+                val events = EventRecorder()
+                val ref = spawn("watch-idempotent-parent") { ParentActor(events) }
+
+                ref.ask(1.seconds) { replyTo -> ParentCommand.WatchActive(replyTo) }.getOrThrow()
+                ref.ask(1.seconds) { replyTo -> ParentCommand.FailChild(replyTo) }.getOrThrow()
+                advanceUntilIdle()
+
+                val childEvents = events.snapshot().filter { it.startsWith("parent:child-terminated:") }
+                childEvents.shouldHaveSize(1)
+
+                ref.shutdown()
+            }
+        }
+
+        test("actor-to-actor replyTo can target another actor ref directly") {
+            runTest {
+                val events = EventRecorder()
+                val ref = spawn("watch-child-reply-parent") { ParentActor(events) }
+
+                ref.ask(1.seconds) { replyTo -> ParentCommand.TriggerChildReply(replyTo) }.getOrThrow()
+                advanceUntilIdle()
+
+                events.snapshot().filter { it == "parent:child-reply" }.shouldHaveSize(1)
+                ref.shutdown()
+            }
+        }
+
         test("watching a foreign actor ref fails explicitly") {
             runTest {
                 val foreignRef =
@@ -84,6 +113,32 @@ class ActorWatchTest :
 
                 failure.shouldNotBe(null)
                 failure!!.message.shouldContain("Only actor refs created by this runtime can be watched")
+            }
+        }
+
+        test("watching self fails explicitly") {
+            runTest {
+                val failure =
+                    runCatching {
+                        spawn("self-watch") { SelfWatchingActor() }
+                    }.exceptionOrNull()
+
+                failure.shouldNotBe(null)
+                failure!!.message.shouldContain("cannot watch itself")
+            }
+        }
+
+        test("watch registration fails once the watcher is shutting down") {
+            runTest {
+                val watched = spawn("watch-target") { MinimalActor() }
+                val watchFailure = CompletableDeferred<Throwable>()
+                val watcher = spawn("watch-during-shutdown") { WatchDuringShutdownActor(watched, watchFailure) }
+
+                watcher.shutdown()
+                val failure = watchFailure.await()
+
+                failure.message.shouldContain("cannot register new watches while shutting down")
+                watched.shutdown()
             }
         }
     })

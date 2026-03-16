@@ -97,12 +97,71 @@ class ActorMailboxTest :
                 val undelivered = mutableListOf<String>()
                 val ref = spawn("recording-actor") { RecordingActor(undelivered) }
 
-                ref.tell(TestCommand.Fail(deferredReplyChannel())).shouldBeSuccess(Unit)
+                ref.tell(
+                    TestCommand.Fail(
+                        replyTo =
+                            object : ReplyRef<String> {
+                                override fun tell(reply: String): Result<Unit> = Result.success(Unit)
+                            },
+                    ),
+                ).shouldBeSuccess(Unit)
                 ref.tell(TestCommand.Record("dropped")).shouldBeSuccess(Unit)
                 advanceUntilIdle()
 
                 undelivered.shouldContainExactly("Record:NOT_DELIVERED")
                 ref.tell(TestCommand.Record("late")).shouldBeFailure().shouldBeInstanceOf<ActorUnavailable>()
+            }
+        }
+
+        test("first shutdown timeout wins across concurrent callers") {
+            runTest {
+                val currentGate = CompletableDeferred<Unit>()
+                val drainGate = CompletableDeferred<Unit>()
+                val ref = spawn("shutdown-timeout-first-wins") { MinimalActor() }
+
+                ref.tell(TestCommand.Block(currentGate)).shouldBeSuccess(Unit)
+                ref.tell(TestCommand.Block(drainGate)).shouldBeSuccess(Unit)
+                val pendingAsk = async { ref.ask(10.seconds) { replyTo -> TestCommand.Ping("after-drain", replyTo) } }
+
+                runCurrent()
+                val firstShutdown = async { ref.shutdown(50.milliseconds) }
+                val secondShutdown = async { ref.shutdown(null) }
+
+                currentGate.complete(Unit)
+                runCurrent()
+                advanceTimeBy(50.milliseconds)
+                runCurrent()
+
+                pendingAsk.await().shouldBeFailure().shouldBeInstanceOf<ActorUnavailable>().reason shouldBe
+                    ActorUnavailableReason.NOT_DELIVERED
+                drainGate.complete(Unit)
+                firstShutdown.await()
+                secondShutdown.await()
+            }
+        }
+
+        test("system watch notifications are processed even when the user mailbox is full") {
+            runTest {
+                val events = EventRecorder()
+                val childRef = CompletableDeferred<ActorRef<ChildCommand>>()
+                val gate = CompletableDeferred<Unit>()
+                val ref =
+                    spawn("system-priority-parent") {
+                        ParentActor(events = events, childRef = childRef, capacity = 1)
+                    }
+
+                ref.tell(ParentCommand.Block(gate)).shouldBeSuccess(Unit)
+                val snapshot = async { ref.ask(1.seconds) { replyTo -> ParentCommand.SnapshotEvents(replyTo) } }
+                runCurrent()
+
+                childRef.await().tell(ChildCommand.Fail).getOrThrow()
+                gate.complete(Unit)
+                advanceUntilIdle()
+
+                val result = snapshot.await().shouldBeSuccess()
+                result.filter { it.startsWith("parent:child-terminated:") }.size shouldBe 1
+
+                ref.shutdown()
             }
         }
     })

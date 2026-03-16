@@ -4,8 +4,7 @@ import io.github.fpaschos.pipekt.actor.Actor
 import io.github.fpaschos.pipekt.actor.ActorContext
 import io.github.fpaschos.pipekt.actor.ActorRef
 import io.github.fpaschos.pipekt.actor.ActorTermination
-import io.github.fpaschos.pipekt.actor.ReplyChannel
-import io.github.fpaschos.pipekt.actor.Request
+import io.github.fpaschos.pipekt.actor.ReplyRef
 import io.github.fpaschos.pipekt.actor.ask
 import io.github.fpaschos.pipekt.actor.spawn
 import io.github.fpaschos.pipekt.core.PayloadSerializer
@@ -167,32 +166,27 @@ private sealed interface OrchestratorCommand {
         val definition: PipelineDefinition,
         val planVersion: String,
         val config: RuntimeConfig,
-        replyTo: ReplyChannel<RuntimeHandle>,
-    ) : Request<RuntimeHandle>(replyTo),
-        OrchestratorCommand
+        val replyTo: ReplyRef<RuntimeHandle>,
+    ) : OrchestratorCommand
 
     class StopPipelineByName(
         val pipelineName: String,
-        replyTo: ReplyChannel<Unit>,
-    ) : Request<Unit>(replyTo),
-        OrchestratorCommand
+        val replyTo: ReplyRef<Unit>,
+    ) : OrchestratorCommand
 
     class StopPipelineByHandleId(
         val handleId: String,
-        replyTo: ReplyChannel<Unit>,
-    ) : Request<Unit>(replyTo),
-        OrchestratorCommand
+        val replyTo: ReplyRef<Unit>,
+    ) : OrchestratorCommand
 
     class SnapshotByHandleId(
         val handleId: String,
-        replyTo: ReplyChannel<PipelineSnapshot>,
-    ) : Request<PipelineSnapshot>(replyTo),
-        OrchestratorCommand
+        val replyTo: ReplyRef<PipelineSnapshot>,
+    ) : OrchestratorCommand
 
     class ListPipelines(
-        replyTo: ReplyChannel<Set<String>>,
-    ) : Request<Set<String>>(replyTo),
-        OrchestratorCommand
+        val replyTo: ReplyRef<Set<String>>,
+    ) : OrchestratorCommand
 
     data class RuntimeTerminated(
         val termination: ActorTermination,
@@ -236,7 +230,7 @@ private class PipelineOrchestratorActor(
             is OrchestratorCommand.StopPipelineByName -> handleStopPipelineByName(command)
             is OrchestratorCommand.StopPipelineByHandleId -> handleStopPipelineByHandleId(command)
             is OrchestratorCommand.SnapshotByHandleId -> handleSnapshotByHandleId(command)
-            is OrchestratorCommand.ListPipelines -> command.success(activeRuntimes.keys.toSet())
+            is OrchestratorCommand.ListPipelines -> command.replyTo.tell(activeRuntimes.keys.toSet())
             is OrchestratorCommand.RuntimeTerminated -> handleRuntimeTerminated(command)
         }
     }
@@ -258,7 +252,7 @@ private class PipelineOrchestratorActor(
         val existing = activeRuntimes[command.definition.name]
         if (existing != null) {
             if (existing.handle.planVersion != command.planVersion) {
-                command.failure(
+                command.replyTo.fail(
                     IllegalStateException(
                         "Pipeline ${command.definition.name} is already active with planVersion " +
                             "${existing.handle.planVersion}; stop it before starting ${command.planVersion}.",
@@ -267,7 +261,7 @@ private class PipelineOrchestratorActor(
                 return
             }
 
-            command.success(existing.handle)
+            command.replyTo.tell(existing.handle)
             return
         }
 
@@ -300,18 +294,18 @@ private class PipelineOrchestratorActor(
             )
 
         activeRuntimes[command.definition.name] = ActiveRuntime(handle = handle, actor = runtimeActor)
-        command.success(handle)
+        command.replyTo.tell(handle)
     }
 
     private suspend fun handleStopPipelineByName(command: OrchestratorCommand.StopPipelineByName) {
         val active = activeRuntimes.remove(command.pipelineName)
         if (active == null) {
-            command.success(Unit)
+            command.replyTo.tell(Unit)
             return
         }
 
         active.actor.shutdown(timeout = null)
-        command.success(Unit)
+        command.replyTo.tell(Unit)
     }
 
     private suspend fun handleStopPipelineByHandleId(command: OrchestratorCommand.StopPipelineByHandleId) {
@@ -320,20 +314,22 @@ private class PipelineOrchestratorActor(
                 active.handle.id == command.handleId
             }
         if (entry == null) {
-            command.success(Unit)
+            command.replyTo.tell(Unit)
             return
         }
 
         activeRuntimes.remove(entry.key)
         entry.value.actor.shutdown(timeout = null)
-        command.success(Unit)
+        command.replyTo.tell(Unit)
     }
 
     private suspend fun handleSnapshotByHandleId(command: OrchestratorCommand.SnapshotByHandleId) {
         val active =
             activeRuntimes.values.firstOrNull { it.handle.id == command.handleId }
                 ?: run {
-                    command.failure(IllegalStateException("Pipeline handle is not active: ${command.handleId}"))
+                    command.replyTo.fail(
+                        IllegalStateException("Pipeline handle is not active: ${command.handleId}"),
+                    )
                     return
                 }
 
@@ -341,7 +337,7 @@ private class PipelineOrchestratorActor(
             active.actor
                 .ask(30.seconds) { replyTo -> RuntimeCommand.Snapshot(replyTo) }
                 .getOrThrow()
-        command.success(snapshot)
+        command.replyTo.tell(snapshot)
     }
 
     private fun handleRuntimeTerminated(command: OrchestratorCommand.RuntimeTerminated) {
