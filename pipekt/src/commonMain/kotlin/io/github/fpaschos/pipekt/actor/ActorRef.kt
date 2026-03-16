@@ -2,6 +2,7 @@ package io.github.fpaschos.pipekt.actor
 
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
+import kotlin.ConsistentCopyVisibility
 import kotlin.time.Duration
 
 /**
@@ -25,73 +26,70 @@ enum class ActorUnavailableReason {
 
     /**
      * The command had been accepted into the mailbox but was never executed by [Actor.handle]
-     * because shutdown failed pending reply-bearing commands before delivery.
+     * because shutdown or failure dropped it before delivery.
      */
     NOT_DELIVERED,
 }
 
 class ActorUnavailable(
     val reason: ActorUnavailableReason,
-    actorLabel: String,
+    label: String,
     cause: Throwable? = null,
-) : ActorException("$actorLabel is unavailable", cause)
+) : ActorException("Actor $label is unavailable", cause)
 
 /**
  * Request/reply did not complete before the timeout elapsed.
  */
 class ActorAskTimeout(
-    actorLabel: String,
+    label: String,
     timeout: Duration,
-) : ActorException("$actorLabel did not reply within $timeout")
+) : ActorException("Actor $label did not reply within $timeout")
 
 /**
  * Actor command handling failed after the command was accepted.
  */
 class ActorCommandFailed(
-    actorLabel: String,
+    label: String,
     cause: Throwable,
-) : ActorException("$actorLabel command failed", cause)
+) : ActorException("Actor $label command failed", cause)
+
+/**
+ * Termination metadata emitted by watch notifications.
+ */
+data class ActorTermination(
+    val actorName: String,
+    val actorLabel: String,
+    val cause: Throwable?,
+)
 
 /**
  * Generic typed handle to an actor.
- *
- * Callers interact through [tell], [ask], and [shutdown]; they do not access the actor
- * instance or mailbox directly.
  */
 interface ActorRef<in Command : Any> {
-    /**
-     * Semantic caller-provided name. This is not guaranteed to be globally unique.
-     */
     val name: String
 
-    /**
-     * Process-local unique diagnostic label derived from [name], e.g. `worker#7`.
-     */
     val label: String
 
-    /**
-     * Sends [command] to the target actor without waiting for a reply.
-     *
-     * Returns [Result.success] when the command was accepted. Returns [Result.failure]
-     * with [ActorUnavailable] when the actor cannot accept the command.
-     */
     fun tell(command: Command): Result<Unit>
 
-    /**
-     * Shuts down the actor. When this returns, the actor loop has terminated and no more
-     * commands are processed.
-     *
-     * @param timeout If non-null, graceful shutdown is attempted; if the timeout expires,
-     *   the implementation may force-cancel and then await termination.
-     */
     suspend fun shutdown(timeout: Duration? = null)
+}
+
+@ConsistentCopyVisibility
+data class DefaultActorRef<Command : Any> internal constructor(
+    override val name: String,
+    override val label: String,
+    internal val runtime: ActorRuntime<Command>,
+) : ActorRef<Command> {
+    override fun tell(command: Command): Result<Unit> = runtime.send(command)
+
+    override suspend fun shutdown(timeout: Duration?) {
+        runtime.shutdown(timeout)
+    }
 }
 
 /**
  * Universal request/reply helper built on reply-bearing commands.
- *
- * The caller receives a [ReplyChannel] builder parameter while the deferred implementation stays
- * internal to the actor package.
  */
 suspend fun <Command : Any, Reply> ActorRef<Command>.ask(
     timeout: Duration,

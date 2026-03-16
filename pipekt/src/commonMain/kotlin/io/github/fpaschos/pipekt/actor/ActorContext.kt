@@ -1,110 +1,104 @@
 package io.github.fpaschos.pipekt.actor
 
-import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.CoroutineScope
-import kotlin.time.Duration
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 
 /**
- * Small runtime capability surface exposed to concrete actors.
+ * Loop-confined runtime capability surface exposed to concrete actors.
  *
- * This intentionally does not model behavior switching or a general actor system.
+ * The context is only valid while executing actor callbacks on the actor loop coroutine.
+ * Although the runtime only passes it into loop-owned callbacks, this is still a normal object
+ * reference and actor code can leak it to other coroutines. Context operations therefore enforce
+ * loop confinement at runtime instead of relying on usage discipline alone.
  */
 interface ActorContext<Command : Any> {
-    /**
-     * Semantic caller-provided name. This is not guaranteed to be globally unique.
-     */
     val name: String
 
-    /**
-     * Process-local unique diagnostic label derived from [name], e.g. `worker#7`.
-     */
     val label: String
 
-    /**
-     * Typed ref for the current actor.
-     */
     val self: ActorRef<Command>
 
     /**
-     * Spawns an owned child actor. Owned children are stopped during parent shutdown.
+     * Guards actor-loop-only access.
+     *
+     * This fails unless the current coroutine is the actor loop coroutine for this actor.
+     *
+     * Use it in helper methods that mutate actor-owned state but do not otherwise touch context
+     * APIs.
+     *
+     * Inline suspend calls from actor callbacks are safe because they stay on the same logical
+     * actor execution path. What this does *not* guarantee is safety for separately launched
+     * coroutines. A `launch { ... }`, callback, or other detached async path must not mutate actor
+     * state directly; it must route work back through the actor mailbox instead.
+     *
+     *
+     * Example of an invalid callback path:
+     * ```kotlin
+     * class CallbackActor : Actor<CallbackCommand>() {
+     *     private var count: Int = 0
+     *
+     *     override suspend fun handle(
+     *         ctx: ActorContext<CallbackCommand>,
+     *         command: CallbackCommand,
+     *     ) {
+     *         registerCallback {
+     *             ctx.guardActorAccess() // This fails.
+     *             count += 1
+     *         }
+     *     }
+     *
+     *     private fun registerCallback(block: () -> Unit) {
+     *         // Calls block later from a different coroutine or thread.
+     *     }
+     * }
+     * ```
      */
-    suspend fun <ChildCommand : Any> spawn(
-        name: String,
-        dispatcher: CoroutineDispatcher? = null,
-        factory: (ActorContext<ChildCommand>) -> Actor<ChildCommand>,
-    ): ActorRef<ChildCommand>
+    suspend fun guardActorAccess()
 
     /**
-     * Observes a child previously created through [spawn].
+     * Registers a one-shot termination watch for [actor].
+     *
+     * This method is loop-confined and fails if called from outside the actor loop coroutine,
+     * even if the context reference was originally obtained from a valid actor callback.
      */
-    fun watch(
-        child: ActorRef<*>,
-        onTerminated: (ChildTermination) -> Command,
+    suspend fun watch(
+        actor: ActorRef<*>,
+        onTerminated: (ActorTermination) -> Command,
     )
 }
 
-internal fun <Command : Any> createActorContext(
-    scope: CoroutineScope,
-    name: String,
-): InternalActorContext<Command> = DefaultActorContext(scope = scope, name = name)
-
-internal interface InternalActorContext<Command : Any> : ActorContext<Command> {
-    val scope: CoroutineScope
-
-    fun bind(actor: Actor<Command>)
-}
-
-private class DefaultActorContext<Command : Any>(
-    override val scope: CoroutineScope,
+internal class DefaultActorContext<Command : Any>(
     override val name: String,
-) : InternalActorContext<Command> {
-    private val actorInstanceId = nextActorInstanceId.incrementAndGet()
+    override val label: String,
+    override val self: ActorRef<Command>,
+    private val runtime: ActorRuntime<Command>,
+) : ActorContext<Command> {
+    private val watchMappers = mutableMapOf<Long, (ActorTermination) -> Command>()
+    private var nextWatchToken: Long = 0
 
-    override val label: String = "$name#$actorInstanceId"
-
-    private lateinit var actor: Actor<Command>
-    private val actorRef =
-        object : ActorRef<Command> {
-            override val name: String
-                get() = this@DefaultActorContext.name
-
-            override val label: String
-                get() = this@DefaultActorContext.label
-
-            override fun tell(command: Command): Result<Unit> = boundActor().actorRef.tell(command)
-
-            override suspend fun shutdown(timeout: Duration?) {
-                boundActor().actorRef.shutdown(timeout)
-            }
+    override suspend fun guardActorAccess() {
+        check(currentCoroutineContext()[Job] === runtime.loopJob) {
+            "This method must only be called only within actor $label coroutine."
         }
+    }
 
-    override val self: ActorRef<Command>
-        get() = actorRef
-
-    override suspend fun <ChildCommand : Any> spawn(
-        name: String,
-        dispatcher: CoroutineDispatcher?,
-        factory: (ActorContext<ChildCommand>) -> Actor<ChildCommand>,
-    ): ActorRef<ChildCommand> = actor.spawnOwnedChild(name, dispatcher, factory = factory)
-
-    override fun watch(
-        child: ActorRef<*>,
-        onTerminated: (ChildTermination) -> Command,
+    override suspend fun watch(
+        actor: ActorRef<*>,
+        onTerminated: (ActorTermination) -> Command,
     ) {
-        actor.watchChild(child, onTerminated)
+        guardActorAccess()
+
+        val target =
+            actor as? DefaultActorRef<*>
+                ?: error("Only actor refs created by this runtime can be watched.")
+
+        val token = ++nextWatchToken
+        watchMappers[token] = onTerminated
+        target.runtime.registerWatcher(runtime, token)
     }
 
-    override fun bind(actor: Actor<Command>) {
-        check(!::actor.isInitialized) {
-            "ActorContext for $label is already bound"
-        }
-        this.actor = actor
-    }
-
-    private fun boundActor(): Actor<Command> {
-        check(::actor.isInitialized) {
-            "ActorContext for $label is not bound yet"
-        }
-        return actor
-    }
+    internal fun dispatchWatchNotification(
+        token: Long,
+        termination: ActorTermination,
+    ): Command? = watchMappers.remove(token)?.invoke(termination)
 }

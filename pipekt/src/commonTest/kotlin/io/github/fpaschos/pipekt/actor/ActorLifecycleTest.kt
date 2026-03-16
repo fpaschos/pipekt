@@ -5,16 +5,12 @@ import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.result.shouldBeSuccess
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
-import kotlin.time.Duration.Companion.milliseconds
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ActorLifecycleTest :
@@ -27,11 +23,8 @@ class ActorLifecycleTest :
                 val owner =
                     backgroundScope.launch {
                         refDeferred.complete(
-                            spawn("startup-actor") { ctx ->
-                                MinimalActor(
-                                    ctx = ctx,
-                                    startupGate = startupGate,
-                                )
+                            spawn("startup-actor") {
+                                MinimalActor(startupGate = startupGate)
                             },
                         )
                     }
@@ -47,30 +40,10 @@ class ActorLifecycleTest :
             }
         }
 
-        test("shutdown during startup fails startup cleanly") {
-            runTest {
-                val scope = CoroutineScope(coroutineContext + SupervisorJob())
-                val startupGate = CompletableDeferred<Unit>()
-                val ctx = createActorContext<TestCommand>(scope, "shutdown-during-startup")
-                val actor = MinimalActor(ctx, startupGate = startupGate)
-
-                val shutdown = async { ctx.self.shutdown() }
-                val startupFailure = async { runCatching { actor.awaitStarted() } }
-
-                advanceUntilIdle()
-                startupGate.complete(Unit)
-                advanceUntilIdle()
-
-                startupFailure.await().exceptionOrNull().shouldBeInstanceOf<CancellationException>()
-                shutdown.await()
-                actor.awaitTerminated()
-            }
-        }
-
         test("startup and shutdown hooks run in sequence") {
             runTest {
                 val events = EventRecorder()
-                val ref = spawn("lifecycle-actor") { ctx -> MinimalActor(ctx, events = events) }
+                val ref = spawn("lifecycle-actor") { MinimalActor(events = events) }
 
                 ref.tell(TestCommand.Record("x")).shouldBeSuccess(Unit)
                 advanceUntilIdle()
@@ -90,8 +63,8 @@ class ActorLifecycleTest :
             runTest {
                 val failure =
                     runCatching {
-                        spawn("failing-start") { ctx ->
-                            FailingStartActor(ctx, IllegalStateException("startup-boom"))
+                        spawn("failing-start") {
+                            FailingStartActor(IllegalStateException("startup-boom"))
                         }
                     }.exceptionOrNull()
 
@@ -102,13 +75,13 @@ class ActorLifecycleTest :
         test("concurrent shutdown callers share the same termination path") {
             runTest {
                 val gate = CompletableDeferred<Unit>()
-                val ref = spawn("concurrent-shutdown-actor") { ctx -> MinimalActor(ctx) }
+                val ref = spawn("concurrent-shutdown-actor") { MinimalActor() }
 
                 ref.tell(TestCommand.Block(gate)).shouldBeSuccess(Unit)
                 advanceUntilIdle()
 
-                val first = async { ref.shutdown(50.milliseconds) }
-                val second = async { ref.shutdown(50.milliseconds) }
+                val first = async { ref.shutdown() }
+                val second = async { ref.shutdown() }
 
                 gate.complete(Unit)
                 advanceUntilIdle()

@@ -3,8 +3,7 @@ package io.github.fpaschos.pipekt.runtime
 import io.github.fpaschos.pipekt.actor.Actor
 import io.github.fpaschos.pipekt.actor.ActorContext
 import io.github.fpaschos.pipekt.actor.ActorRef
-import io.github.fpaschos.pipekt.actor.ChildTermination
-import io.github.fpaschos.pipekt.actor.InternalActorContext
+import io.github.fpaschos.pipekt.actor.ActorTermination
 import io.github.fpaschos.pipekt.actor.ReplyChannel
 import io.github.fpaschos.pipekt.actor.Request
 import io.github.fpaschos.pipekt.actor.ask
@@ -23,6 +22,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.withContext
 import kotlin.time.Clock
 import kotlin.time.Duration
@@ -136,9 +136,8 @@ class PipelineOrchestrator(
             }
 
             actorRef ?: withContext(orchestratorScope.coroutineContext) {
-                spawn("pipekt-orchestrator") { ctx ->
+                spawn("pipekt-orchestrator") {
                     PipelineOrchestratorActor(
-                        ctx = ctx,
                         store = store,
                         serializer = serializer,
                         config = config,
@@ -196,24 +195,29 @@ private sealed interface OrchestratorCommand {
         OrchestratorCommand
 
     data class RuntimeTerminated(
-        val termination: ChildTermination,
+        val termination: ActorTermination,
     ) : OrchestratorCommand
 }
 
 private class PipelineOrchestratorActor(
-    ctx: ActorContext<OrchestratorCommand>,
     private val store: DurableStore,
     private val serializer: PayloadSerializer,
     private val config: OrchestratorConfig,
     private val handleController: RuntimeHandleController,
-) : Actor<OrchestratorCommand>(ctx) {
-    private val actorScope = (ctx as InternalActorContext<OrchestratorCommand>).scope
+) : Actor<OrchestratorCommand>() {
+    private lateinit var actorScope: CoroutineScope
 
     private val activeRuntimes = mutableMapOf<String, ActiveRuntime>()
     private var watchdogJob: Job? = null
     private var nextHandleId: Long = 0
 
-    override suspend fun postStart() {
+    override suspend fun postStart(ctx: ActorContext<OrchestratorCommand>) {
+        actorScope =
+            CoroutineScope(
+                currentCoroutineContext() +
+                    SupervisorJob(currentCoroutineContext()[Job]) +
+                    CoroutineName("${ctx.label}/orchestrator"),
+            )
         watchdogJob =
             actorScope.launch(CoroutineName("${ctx.label}/watchdog")) {
                 while (isActive) {
@@ -223,9 +227,12 @@ private class PipelineOrchestratorActor(
             }
     }
 
-    override suspend fun handle(command: OrchestratorCommand) {
+    override suspend fun handle(
+        ctx: ActorContext<OrchestratorCommand>,
+        command: OrchestratorCommand,
+    ) {
         when (command) {
-            is OrchestratorCommand.StartPipeline -> handleStartPipeline(command)
+            is OrchestratorCommand.StartPipeline -> handleStartPipeline(ctx, command)
             is OrchestratorCommand.StopPipelineByName -> handleStopPipelineByName(command)
             is OrchestratorCommand.StopPipelineByHandleId -> handleStopPipelineByHandleId(command)
             is OrchestratorCommand.SnapshotByHandleId -> handleSnapshotByHandleId(command)
@@ -234,7 +241,7 @@ private class PipelineOrchestratorActor(
         }
     }
 
-    override suspend fun preStop() {
+    override suspend fun preStop(ctx: ActorContext<OrchestratorCommand>) {
         val runtimes = activeRuntimes.values.toList()
         activeRuntimes.clear()
 
@@ -244,7 +251,10 @@ private class PipelineOrchestratorActor(
         watchdogJob?.join()
     }
 
-    private suspend fun handleStartPipeline(command: OrchestratorCommand.StartPipeline) {
+    private suspend fun handleStartPipeline(
+        ctx: ActorContext<OrchestratorCommand>,
+        command: OrchestratorCommand.StartPipeline,
+    ) {
         val existing = activeRuntimes[command.definition.name]
         if (existing != null) {
             if (existing.handle.planVersion != command.planVersion) {
@@ -262,9 +272,8 @@ private class PipelineOrchestratorActor(
         }
 
         val runtimeActor =
-            ctx.spawn(name = "pipeline-${command.definition.name}") { childCtx ->
+            spawn(name = "pipeline-${command.definition.name}") {
                 PipelineRuntimeActor(
-                    ctx = childCtx,
                     pipeline = command.definition,
                     store = store,
                     serializer = serializer,
@@ -338,7 +347,7 @@ private class PipelineOrchestratorActor(
     private fun handleRuntimeTerminated(command: OrchestratorCommand.RuntimeTerminated) {
         val pipelineName =
             activeRuntimes.entries.firstOrNull { (_, active) ->
-                active.actor.label == command.termination.childLabel
+                active.actor.label == command.termination.actorLabel
             }?.key
         if (pipelineName != null) {
             activeRuntimes.remove(pipelineName)

@@ -54,20 +54,22 @@ sealed interface TestCommand {
 }
 
 class MinimalActor(
-    ctx: ActorContext<TestCommand>,
     private val events: EventRecorder = EventRecorder(),
     private val startupGate: CompletableDeferred<Unit>? = null,
     capacity: Int = Channel.BUFFERED,
-) : Actor<TestCommand>(ctx, capacity) {
+) : Actor<TestCommand>(capacity) {
     private val recorded = mutableListOf<String>()
 
-    override suspend fun postStart() {
+    override suspend fun postStart(ctx: ActorContext<TestCommand>) {
         events.record("postStart:begin")
         startupGate?.await()
         events.record("postStart:end")
     }
 
-    override suspend fun handle(command: TestCommand) {
+    override suspend fun handle(
+        ctx: ActorContext<TestCommand>,
+        command: TestCommand,
+    ) {
         when (command) {
             is TestCommand.Record -> {
                 recorded += command.value
@@ -108,20 +110,22 @@ class MinimalActor(
         }
     }
 
-    override suspend fun preStop() {
+    override suspend fun preStop(ctx: ActorContext<TestCommand>) {
         events.record("preStop")
     }
 
-    override suspend fun postStop() {
+    override suspend fun postStop(ctx: ActorContext<TestCommand>) {
         events.record("postStop")
     }
 }
 
 class RecordingActor(
-    ctx: ActorContext<TestCommand>,
     private val undelivered: MutableList<String>,
-) : Actor<TestCommand>(ctx, Channel.BUFFERED) {
-    override suspend fun handle(command: TestCommand) {
+) : Actor<TestCommand>(Channel.BUFFERED) {
+    override suspend fun handle(
+        ctx: ActorContext<TestCommand>,
+        command: TestCommand,
+    ) {
         when (command) {
             is TestCommand.Record -> Unit
             is TestCommand.Ping -> command.success("echo: ${command.value}")
@@ -134,6 +138,7 @@ class RecordingActor(
     }
 
     override fun onUndeliveredCommand(
+        ctx: ActorContext<TestCommand>,
         command: TestCommand,
         reason: ActorUnavailableReason,
     ) {
@@ -148,17 +153,19 @@ class RecordingActor(
                 is TestCommand.LoopName -> "LoopName"
             }
         undelivered += "$label:${reason.name}"
-        super.onUndeliveredCommand(command, reason)
+        super.onUndeliveredCommand(ctx, command, reason)
     }
 }
 
 class FailingStartActor(
-    ctx: ActorContext<TestCommand>,
     private val startupFailure: Throwable,
-) : Actor<TestCommand>(ctx, Channel.BUFFERED) {
-    override suspend fun postStart(): Unit = throw startupFailure
+) : Actor<TestCommand>(Channel.BUFFERED) {
+    override suspend fun postStart(ctx: ActorContext<TestCommand>): Unit = throw startupFailure
 
-    override suspend fun handle(command: TestCommand) = Unit
+    override suspend fun handle(
+        ctx: ActorContext<TestCommand>,
+        command: TestCommand,
+    ) = Unit
 }
 
 sealed interface ChildCommand {
@@ -184,45 +191,51 @@ sealed interface ParentCommand {
         ParentCommand
 
     data class ChildObserved(
-        val termination: ChildTermination,
+        val termination: ActorTermination,
     ) : ParentCommand
 
-    data class ChildCaptured(
-        val value: String,
-    ) : ParentCommand
+    data class WatchStopped(
+        private val channel: ReplyChannel<Unit>,
+    ) : Request<Unit>(channel),
+        ParentCommand
 }
 
 class ChildActor(
-    ctx: ActorContext<ChildCommand>,
     private val events: EventRecorder,
-) : Actor<ChildCommand>(ctx, Channel.BUFFERED) {
-    override suspend fun handle(command: ChildCommand) {
+) : Actor<ChildCommand>(Channel.BUFFERED) {
+    override suspend fun handle(
+        ctx: ActorContext<ChildCommand>,
+        command: ChildCommand,
+    ) {
         when (command) {
             ChildCommand.Fail -> error("child-boom")
             ChildCommand.Capture -> events.record("child:capture")
         }
     }
 
-    override suspend fun postStop() {
+    override suspend fun postStop(ctx: ActorContext<ChildCommand>) {
         events.record("child:postStop")
     }
 }
 
 class ParentActor(
-    ctx: ActorContext<ParentCommand>,
     private val events: EventRecorder,
-) : Actor<ParentCommand>(ctx, Channel.BUFFERED) {
+    private val childRef: CompletableDeferred<ActorRef<ChildCommand>>? = null,
+    private val selfRef: CompletableDeferred<ActorRef<ParentCommand>>? = null,
+) : Actor<ParentCommand>(Channel.BUFFERED) {
     private lateinit var child: ActorRef<ChildCommand>
 
-    override suspend fun postStart() {
-        child =
-            ctx.spawn(name = "owned-child") { childCtx ->
-                ChildActor(childCtx, events)
-            }
+    override suspend fun postStart(ctx: ActorContext<ParentCommand>) {
+        selfRef?.complete(ctx.self)
+        child = spawn(name = "watched-child") { ChildActor(events) }
+        childRef?.complete(child)
         ctx.watch(child) { ParentCommand.ChildObserved(it) }
     }
 
-    override suspend fun handle(command: ParentCommand) {
+    override suspend fun handle(
+        ctx: ActorContext<ParentCommand>,
+        command: ParentCommand,
+    ) {
         when (command) {
             is ParentCommand.SnapshotEvents -> {
                 command.success(events.snapshot())
@@ -240,12 +253,58 @@ class ParentActor(
 
             is ParentCommand.ChildObserved -> {
                 val causeName = command.termination.cause?.message ?: "normal"
-                events.record("parent:child-terminated:${command.termination.childLabel}:$causeName")
+                events.record("parent:child-terminated:${command.termination.actorLabel}:$causeName")
             }
 
-            is ParentCommand.ChildCaptured -> {
-                events.record("parent:captured:${command.value}")
+            is ParentCommand.WatchStopped -> {
+                ctx.watch(child) { ParentCommand.ChildObserved(it) }
+                command.success(Unit)
             }
         }
     }
+
+    override suspend fun preStop(ctx: ActorContext<ParentCommand>) {
+        if (::child.isInitialized) {
+            child.shutdown()
+        }
+    }
+}
+
+class SelfCapturingActor(
+    private val selfRef: CompletableDeferred<ActorRef<TestCommand>>,
+) : Actor<TestCommand>() {
+    override suspend fun postStart(ctx: ActorContext<TestCommand>) {
+        selfRef.complete(ctx.self)
+    }
+
+    override suspend fun handle(
+        ctx: ActorContext<TestCommand>,
+        command: TestCommand,
+    ) = Unit
+}
+
+class ContextLeakingActor(
+    private val leakedContext: CompletableDeferred<ActorContext<TestCommand>>,
+) : Actor<TestCommand>() {
+    override suspend fun postStart(ctx: ActorContext<TestCommand>) {
+        leakedContext.complete(ctx)
+    }
+
+    override suspend fun handle(
+        ctx: ActorContext<TestCommand>,
+        command: TestCommand,
+    ) = Unit
+}
+
+class ForeignWatchingActor(
+    private val foreignRef: ActorRef<Any>,
+) : Actor<TestCommand>() {
+    override suspend fun postStart(ctx: ActorContext<TestCommand>) {
+        ctx.watch(foreignRef) { TestCommand.Record(it.actorLabel) }
+    }
+
+    override suspend fun handle(
+        ctx: ActorContext<TestCommand>,
+        command: TestCommand,
+    ) = Unit
 }

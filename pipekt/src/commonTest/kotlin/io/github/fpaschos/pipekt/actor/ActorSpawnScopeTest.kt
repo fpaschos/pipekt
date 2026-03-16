@@ -21,12 +21,12 @@ class ActorSpawnScopeTest :
         test("spawn keeps semantic names distinct from labels") {
             runTest {
                 val first =
-                    spawn("shared-name") { ctx ->
-                        MinimalActor(ctx)
+                    spawn("shared-name") {
+                        MinimalActor()
                     }
                 val second =
-                    spawn("shared-name") { ctx ->
-                        MinimalActor(ctx)
+                    spawn("shared-name") {
+                        MinimalActor()
                     }
 
                 first.name shouldBe "shared-name"
@@ -41,8 +41,8 @@ class ActorSpawnScopeTest :
         test("spawned actor loop uses the generated actor label as coroutine name") {
             runTest {
                 val ref =
-                    spawn("loop-name-actor") { ctx ->
-                        MinimalActor(ctx)
+                    spawn("loop-name-actor") {
+                        MinimalActor()
                     }
 
                 ref.ask(1.seconds) { replyTo -> TestCommand.LoopName(replyTo) }.shouldBeSuccess(ref.label)
@@ -55,9 +55,8 @@ class ActorSpawnScopeTest :
             runTest {
                 val selfRef = CompletableDeferred<ActorRef<TestCommand>>()
                 val ref =
-                    spawn("self-check") { ctx ->
-                        selfRef.complete(ctx.self)
-                        MinimalActor(ctx)
+                    spawn("self-check") {
+                        SelfCapturingActor(selfRef)
                     }
 
                 val fromContext = selfRef.await()
@@ -74,8 +73,8 @@ class ActorSpawnScopeTest :
                 val ownerJob: Job =
                     backgroundScope.launch {
                         actorRef.complete(
-                            spawn("cancellable-actor") { ctx ->
-                                MinimalActor(ctx)
+                            spawn("cancellable-actor") {
+                                MinimalActor()
                             },
                         )
                     }
@@ -100,8 +99,8 @@ class ActorSpawnScopeTest :
                             spawn(
                                 name = "override-actor",
                                 dispatcher = overrideDispatcher,
-                            ) { ctx ->
-                                MinimalActor(ctx)
+                            ) {
+                                MinimalActor()
                             },
                         )
                     }

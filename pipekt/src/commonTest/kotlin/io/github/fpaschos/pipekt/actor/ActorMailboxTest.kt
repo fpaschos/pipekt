@@ -21,7 +21,7 @@ class ActorMailboxTest :
     FunSpec({
         test("many one-way messages are processed in mailbox order") {
             runTest {
-                val ref = spawn("mailbox-order-actor") { ctx -> MinimalActor(ctx) }
+                val ref = spawn("mailbox-order-actor") { MinimalActor() }
 
                 (1..20).forEach { index ->
                     ref.tell(TestCommand.Record("v$index")).shouldBeSuccess(Unit)
@@ -39,7 +39,7 @@ class ActorMailboxTest :
 
         test("many ask messages complete correctly under load") {
             runTest {
-                val ref = spawn("mailbox-ask-actor") { ctx -> MinimalActor(ctx) }
+                val ref = spawn("mailbox-ask-actor") { MinimalActor() }
 
                 val replies =
                     (1..20)
@@ -54,7 +54,7 @@ class ActorMailboxTest :
 
         test("queued requests fail as not delivered when an earlier command crashes") {
             runTest {
-                val ref = spawn("crash-actor") { ctx -> MinimalActor(ctx) }
+                val ref = spawn("crash-actor") { MinimalActor() }
 
                 val failureAsk = async { ref.ask(1.seconds) { replyTo -> TestCommand.Fail(replyTo) } }
                 val pendingAsk = async { ref.ask(1.seconds) { replyTo -> TestCommand.Ping("after", replyTo) } }
@@ -67,10 +67,10 @@ class ActorMailboxTest :
             }
         }
 
-        test("forced shutdown drains pending requests as not delivered") {
+        test("cooperative shutdown waits for the current handler before dropping queued requests") {
             runTest {
                 val gate = CompletableDeferred<Unit>()
-                val ref = spawn("forced-shutdown-actor") { ctx -> MinimalActor(ctx) }
+                val ref = spawn("cooperative-shutdown-actor") { MinimalActor() }
 
                 ref.tell(TestCommand.Block(gate)).shouldBeSuccess(Unit)
                 val pendingAsk = async { ref.ask(10.seconds) { replyTo -> TestCommand.Ping("queued", replyTo) } }
@@ -81,10 +81,13 @@ class ActorMailboxTest :
                 advanceTimeBy(50.milliseconds)
                 runCurrent()
 
-                val pendingCause = pendingAsk.await().shouldBeFailure().shouldBeInstanceOf<ActorUnavailable>()
-                pendingCause.reason shouldBe ActorUnavailableReason.NOT_DELIVERED
+                shutdown.isCompleted shouldBe false
+                pendingAsk.isCompleted shouldBe false
 
                 gate.complete(Unit)
+                runCurrent()
+
+                pendingAsk.await().shouldBeSuccess("echo: queued")
                 shutdown.await()
             }
         }
@@ -92,7 +95,7 @@ class ActorMailboxTest :
         test("undelivered one-way commands are reported through the hook") {
             runTest {
                 val undelivered = mutableListOf<String>()
-                val ref = spawn("recording-actor") { ctx -> RecordingActor(ctx, undelivered) }
+                val ref = spawn("recording-actor") { RecordingActor(undelivered) }
 
                 ref.tell(TestCommand.Fail(deferredReplyChannel())).shouldBeSuccess(Unit)
                 ref.tell(TestCommand.Record("dropped")).shouldBeSuccess(Unit)

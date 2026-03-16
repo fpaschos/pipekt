@@ -2,12 +2,15 @@ package io.github.fpaschos.pipekt.runtime
 
 import io.github.fpaschos.pipekt.actor.Actor
 import io.github.fpaschos.pipekt.actor.ActorContext
-import io.github.fpaschos.pipekt.actor.InternalActorContext
 import io.github.fpaschos.pipekt.actor.ReplyChannel
 import io.github.fpaschos.pipekt.actor.Request
 import io.github.fpaschos.pipekt.core.PayloadSerializer
 import io.github.fpaschos.pipekt.core.PipelineDefinition
 import io.github.fpaschos.pipekt.store.DurableStore
+import kotlinx.coroutines.CoroutineName
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 
 internal sealed interface RuntimeCommand {
     class Snapshot(
@@ -17,20 +20,25 @@ internal sealed interface RuntimeCommand {
 }
 
 internal class PipelineRuntimeActor(
-    ctx: ActorContext<RuntimeCommand>,
     private val pipeline: PipelineDefinition,
     private val store: DurableStore,
     private val serializer: PayloadSerializer,
     private val planVersion: String,
     private val config: RuntimeConfig,
-) : Actor<RuntimeCommand>(ctx) {
-    private val actorScope = (ctx as InternalActorContext<RuntimeCommand>).scope
+) : Actor<RuntimeCommand>() {
+    private lateinit var actorScope: CoroutineScope
 
     private lateinit var engine: PipelineExecutionEngine
     private lateinit var runId: String
     private var lifecycle: PipelineLifecycle = PipelineLifecycle.SHUTDOWN
 
-    override suspend fun postStart() {
+    override suspend fun postStart(ctx: ActorContext<RuntimeCommand>) {
+        actorScope =
+            CoroutineScope(
+                currentCoroutineContext() +
+                    SupervisorJob(currentCoroutineContext()[kotlinx.coroutines.Job]) +
+                    CoroutineName("${ctx.label}/runtime"),
+            )
         engine =
             PipelineExecutionEngine(
                 pipeline = pipeline,
@@ -45,7 +53,10 @@ internal class PipelineRuntimeActor(
         lifecycle = PipelineLifecycle.RUNNING
     }
 
-    override suspend fun handle(command: RuntimeCommand) {
+    override suspend fun handle(
+        ctx: ActorContext<RuntimeCommand>,
+        command: RuntimeCommand,
+    ) {
         when (command) {
             is RuntimeCommand.Snapshot ->
                 command.success(
@@ -59,14 +70,17 @@ internal class PipelineRuntimeActor(
         }
     }
 
-    override suspend fun preStop() {
+    override suspend fun preStop(ctx: ActorContext<RuntimeCommand>) {
         if (::engine.isInitialized) {
             engine.stop()
+        }
+        if (::actorScope.isInitialized) {
+            actorScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
         }
         lifecycle = PipelineLifecycle.SHUTDOWN
     }
 
-    override suspend fun postStop() {
+    override suspend fun postStop(ctx: ActorContext<RuntimeCommand>) {
         lifecycle = PipelineLifecycle.SHUTDOWN
     }
 }

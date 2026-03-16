@@ -6,14 +6,16 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ChannelResult
+import kotlinx.coroutines.channels.getOrElse
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
@@ -21,11 +23,6 @@ import kotlin.time.Duration
 
 /**
  * Lifecycle states for the shared actor infrastructure.
- *
- * - [STARTING]: Actor exists but [Actor.postStart] has not completed successfully yet.
- * - [RUNNING]: Accepts new commands.
- * - [SHUTTING_DOWN]: No new commands accepted; draining or being cancelled.
- * - [SHUTDOWN]: Loop terminated and cleanup completed.
  */
 internal enum class ActorLifecycle {
     STARTING,
@@ -36,185 +33,69 @@ internal enum class ActorLifecycle {
 
 internal val nextActorInstanceId = atomic(0L)
 
+private sealed interface MailboxEvent<out Command : Any> {
+    data class UserCommand<Command : Any>(
+        val command: Command,
+    ) : MailboxEvent<Command>
+
+    data class WatchNotification(
+        val token: Long,
+        val termination: ActorTermination,
+    ) : MailboxEvent<Nothing>
+}
+
+private data class StopSignal(
+    val timeout: Duration?,
+)
+
+private sealed interface WatchState {
+    data class Active(
+        val listeners: List<WatchRegistration>,
+    ) : WatchState
+
+    data class Terminated(
+        val termination: ActorTermination,
+    ) : WatchState
+}
+
+private data class WatchRegistration(
+    val watcher: ActorRuntime<*>,
+    val token: Long,
+)
+
 /**
- * Base actor infrastructure: mailbox, loop job, startup/termination barriers, lifecycle,
- * and shutdown behavior. Concrete actors define [Command], implement [handle], and
- * optionally override [postStart], [preStop], [postStop], [onCommandFailure], and
- * [onUndeliveredCommand].
+ * Base actor behavior.
  *
- * Construction is via a suspend `spawn(...)` that waits for [awaitStarted] and returns
- * a ref; the loop is not started from `init` and is not a separate public lifecycle.
- *
- * @param Command Sealed command type for this actor.
- * @param scope Scope that owns the mailbox loop; cancellation of this scope terminates the actor.
- * @param name Name used for the loop coroutine and error messages.
- * @param capacity Mailbox channel capacity; default is [Channel.BUFFERED].
+ * Concrete actors may keep internal mutable state, but it must only be touched from the actor
+ * callbacks that run on the command loop coroutine. See [ActorContext.guardActorAccess] for the
+ * explicit runtime guard and usage guidance.
  */
 abstract class Actor<Command : Any>(
-    protected val ctx: ActorContext<Command>,
-    capacity: Int = Channel.BUFFERED,
+    internal val capacity: Int = Channel.BUFFERED,
 ) {
-    private val runtimeContext = ctx as InternalActorContext<Command>
-    private val scope = runtimeContext.scope
-    private val name = runtimeContext.name
-    private val label = runtimeContext.label
+    open suspend fun postStart(ctx: ActorContext<Command>) {}
 
-    /** Bounded mailbox for commands. */
-    protected val mailbox = Channel<Command>(capacity)
+    abstract suspend fun handle(
+        ctx: ActorContext<Command>,
+        command: Command,
+    )
 
-    private val lifecycleMutex = Mutex()
-    private val started = CompletableDeferred<Unit>()
-    private val terminated = CompletableDeferred<Unit>()
+    open suspend fun preStop(ctx: ActorContext<Command>) {}
 
-    private val lifecycle = atomic(ActorLifecycle.STARTING)
-    private val terminalCause = atomic<Throwable?>(null)
-    private val children = mutableListOf<ActorChild<Command>>()
-    internal val actorRef: ActorRef<Command> =
-        object : ActorRef<Command> {
-            override val name: String
-                get() = this@Actor.name
+    open suspend fun postStop(ctx: ActorContext<Command>) {}
 
-            override val label: String
-                get() = this@Actor.label
-
-            override fun tell(command: Command): Result<Unit> = send(command)
-
-            override suspend fun shutdown(timeout: Duration?) {
-                this@Actor.shutdown(timeout = timeout)
-            }
-        }
-    private val childScope =
-        CoroutineScope(
-            scope.coroutineContext +
-                SupervisorJob(scope.coroutineContext[Job]) +
-                CoroutineName("${this@Actor.label}/children"),
-        )
-
-    init {
-        runtimeContext.bind(this)
-    }
-
-    private val loopJob: Job =
-        scope.launch(CoroutineName(this@Actor.label)) {
-            try {
-                // Run actor owned startup before the actor becomes externally usable.
-                // If this throws, spawn()/awaitStarted() fail and no ref is returned.
-                postStart()
-
-                // Only a coroutine that still sees STARTING may publish RUNNING.
-                // Shutdown may have won the race while postStart() was running.
-                val startedNow =
-                    lifecycleMutex.withLock {
-                        if (lifecycle.value != ActorLifecycle.STARTING) {
-                            false
-                        } else {
-                            lifecycle.value = ActorLifecycle.RUNNING
-                            true
-                        }
-                    }
-
-                if (!startedNow) {
-                    // Exit without entering the mailbox drain loop; fail startup so spawn() does not hang.
-                    if (!started.isCompleted) {
-                        started.completeExceptionally(
-                            CancellationException("${this@Actor.label} was stopped during startup"),
-                        )
-                    }
-                    return@launch
-                }
-                // Publish the actor as started. From this point, refs may use it.
-                started.complete(Unit)
-
-                // Drain mailbox commands one at a time.
-                for (command in mailbox) {
-                    try {
-                        handle(command)
-                    } catch (t: Throwable) {
-                        // Command failure is actor-fatal by default.
-                        terminalCause.value = t
-                        onCommandFailure(command, t)
-                        mailbox.close(t)
-                        failPendingCommands()
-                        throw t
-                    }
-                }
-            } catch (t: Throwable) {
-                // Startup or loop infrastructure failed; fail the startup barrier so spawn()/awaitStarted() do not hang.
-                terminalCause.value = terminalCause.value ?: t
-                if (!started.isCompleted) {
-                    started.completeExceptionally(t)
-                }
-            } finally {
-                // Publish the terminal lifecycle before releasing shutdown waiters.
-                lifecycle.value = ActorLifecycle.SHUTDOWN
-                try {
-                    postStop()
-                } finally {
-                    // Shutdown callers and tests can now observe completion.
-                    terminated.complete(Unit)
-                    cancelOwnedScope()
-                }
-            }
-        }
-
-    /**
-     * Suspends until the actor has transitioned to [ActorLifecycle.RUNNING].
-     * Fails if startup failed or the actor was stopped during startup.
-     */
-    suspend fun awaitStarted() {
-        started.await()
-    }
-
-    /**
-     * Suspends until the actor loop has terminated and [ActorLifecycle.SHUTDOWN] is set.
-     */
-    suspend fun awaitTerminated() {
-        terminated.await()
-    }
-
-    /** Process one command. Called from the mailbox loop. */
-    protected abstract suspend fun handle(command: Command)
-
-    /**
-     * Hook run before the mailbox drain loop starts. Use for actor-specific side jobs
-     * (watchdogs, pollers, child cleanup). Failures here cause startup to fail.
-     */
-    protected open suspend fun postStart() {}
-
-    /**
-     * Hook run when shutdown begins, after the mailbox is closed. Use to stop side jobs
-     * and release actor-owned resources.
-     */
-    protected open suspend fun preStop() {}
-
-    /**
-     * Hook run after the actor loop has terminated. Use this when cleanup must happen
-     * only after command draining/cancellation has completed.
-     */
-    protected open suspend fun postStop() {}
-
-    /**
-     * Called when [handle] throws.
-     *
-     * Default behavior completes the failing reply-bearing command exceptionally with
-     * [ActorCommandFailed]. The actor stops after this hook returns.
-     */
-    protected open suspend fun onCommandFailure(
+    open suspend fun onCommandFailure(
+        ctx: ActorContext<Command>,
         command: Command,
         cause: Throwable,
     ) {
         if (command is ReplyRequest<*>) {
-            command.failRequest(ActorCommandFailed(this@Actor.label, cause))
+            command.failRequest(ActorCommandFailed(ctx.label, cause))
         }
     }
 
-    /**
-     * Called for commands accepted earlier but never delivered to [handle].
-     *
-     * Default behavior completes reply-bearing commands exceptionally with
-     * [ActorUnavailable] and ignores one-way commands.
-     */
-    protected open fun onUndeliveredCommand(
+    open fun onUndeliveredCommand(
+        ctx: ActorContext<Command>,
         command: Command,
         reason: ActorUnavailableReason,
     ) {
@@ -222,218 +103,268 @@ abstract class Actor<Command : Any>(
             command.failRequest(
                 ActorUnavailable(
                     reason = reason,
-                    actorLabel = this@Actor.label,
+                    label = ctx.label,
                 ),
             )
         }
     }
+}
 
-    /**
-     * Non-blocking send.
-     *
-     * Returns [Result.success] when [command] is accepted into the mailbox.
-     * Returns [Result.failure] with [ActorUnavailable] when the actor is not
-     * accepting commands or when the mailbox cannot accept the command.
-     */
-    protected fun send(command: Command): Result<Unit> {
+internal class ActorRuntime<Command : Any>(
+    val name: String,
+    val label: String,
+    parentScope: CoroutineScope,
+    dispatcher: CoroutineDispatcher?,
+    actor: Actor<Command>,
+) {
+    private val scope = createActorScope(parentScope, name, dispatcher)
+    private val mailbox = Channel<MailboxEvent<Command>>(actor.capacity)
+    private val stopSignal = Channel<StopSignal>(capacity = 1)
+    private val started = CompletableDeferred<Unit>()
+    private val terminated = CompletableDeferred<Unit>()
+    private val lifecycle = atomic(ActorLifecycle.STARTING)
+    private val terminalCause = atomic<Throwable?>(null)
+    private val watchState = atomic<WatchState>(WatchState.Active(emptyList()))
+
+    private lateinit var selfRef: DefaultActorRef<Command>
+    internal lateinit var loopJob: Job
+        private set
+
+    fun attachRef(ref: DefaultActorRef<Command>) {
+        check(!::selfRef.isInitialized) { "Actor runtime for $label already has a ref." }
+        selfRef = ref
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun start(actor: Actor<Command>) {
+        check(!::loopJob.isInitialized) { "Actor runtime for $label already started." }
+        val ctx = DefaultActorContext(name = name, label = label, self = selfRef, runtime = this)
+
+        loopJob =
+            scope.launch(CoroutineName(label)) {
+                var keepRunning = true
+
+                try {
+                    actor.postStart(ctx)
+
+                    val startupStop = stopSignal.tryReceive().getOrNull()
+                    if (startupStop != null) {
+                        lifecycle.value = ActorLifecycle.SHUTTING_DOWN
+                        notifyStartFail(CancellationException("$label was stopped during startup"))
+                        mailbox.close()
+                        actor.preStop(ctx)
+                        dropPendingEvents(actor, ctx)
+                        keepRunning = false
+                    } else {
+                        lifecycle.value = ActorLifecycle.RUNNING
+                        notifyStart()
+                    }
+
+                    while (keepRunning) {
+                        select {
+                            stopSignal.onReceive { request ->
+                                lifecycle.value = ActorLifecycle.SHUTTING_DOWN
+                                mailbox.close()
+                                actor.preStop(ctx)
+
+                                val drained =
+                                    if (request.timeout == null) {
+                                        drainMailbox(actor, ctx)
+                                        true
+                                    } else {
+                                        withTimeoutOrNull(request.timeout) {
+                                            drainMailbox(actor, ctx)
+                                            true
+                                        } == true
+                                    }
+
+                                if (!drained) {
+                                    dropPendingEvents(actor, ctx)
+                                }
+                                keepRunning = false
+                            }
+
+                            mailbox.onReceiveCatching { result ->
+                                val event =
+                                    result.getOrElse {
+                                        lifecycle.value = ActorLifecycle.SHUTTING_DOWN
+                                        keepRunning = false
+                                        return@onReceiveCatching
+                                    }
+                                handleEvent(actor, ctx, event)
+                            }
+                        }
+                    }
+                } catch (t: Throwable) {
+                    terminalCause.value = terminalCause.value ?: t
+                    notifyStartFail(t)
+                } finally {
+                    lifecycle.value = ActorLifecycle.SHUTDOWN
+                    try {
+                        actor.postStop(ctx)
+                    } finally {
+                        publishTermination()
+                        notifyTermination()
+                        cancelOwnedScope()
+                    }
+                }
+            }
+    }
+
+    fun send(command: Command): Result<Unit> {
         if (lifecycle.value != ActorLifecycle.RUNNING) {
             return Result.failure(
                 ActorUnavailable(
                     reason = ActorUnavailableReason.ACTOR_CLOSED,
-                    actorLabel = this@Actor.label,
+                    label = label,
                 ),
             )
         }
 
-        val result = mailbox.trySend(command)
-        return if (result.isSuccess) {
-            Result.success(Unit)
-        } else {
-            Result.failure(
-                ActorUnavailable(
-                    reason = ActorUnavailableReason.MAILBOX_FULL,
-                    actorLabel = this@Actor.label,
-                    cause = result.exceptionOrNull(),
-                ),
-            )
-        }
+        val result = mailbox.trySend(MailboxEvent.UserCommand(command))
+        return result.toActorResult(
+            reason = ActorUnavailableReason.ACTOR_CLOSED,
+            label = label,
+        )
     }
 
-    /**
-     * Shuts down the actor.
-     *
-     * Shutdown is single-flight: only the first caller performs the state transition and
-     * shutdown work; later callers simply wait for [awaitTerminated].
-     *
-     * Shutdown order:
-     * 1. Move the actor from [ActorLifecycle.STARTING] or [ActorLifecycle.RUNNING] to
-     *    [ActorLifecycle.SHUTTING_DOWN].
-     * 2. Close the mailbox so no new commands are accepted.
-     * 3. If [gracefully] is `true`, run [preStop] and allow the actor to terminate normally.
-     * 4. If graceful shutdown exceeds [timeout], or if [gracefully] is `false`, cancel the
-     *    actor loop and wait for termination.
-     *
-     * Notes:
-     * - [timeout] only has meaning when [gracefully] is `true`.
-     * - [preStop] is included in the graceful timeout budget, so it must be cancellation-cooperative.
-     * - When this function returns, the actor loop has terminated.
-     */
-    protected suspend fun shutdown(
-        gracefully: Boolean = true,
-        timeout: Duration? = null,
-    ) {
-        require(gracefully || timeout == null) {
-            "timeout is only valid when gracefully = true"
-        }
-
-        val shouldStop =
-            lifecycleMutex.withLock {
-                when (lifecycle.value) {
-                    ActorLifecycle.STARTING,
-                    ActorLifecycle.RUNNING,
-                    -> {
-                        lifecycle.value = ActorLifecycle.SHUTTING_DOWN
-                        true
-                    }
-
-                    ActorLifecycle.SHUTTING_DOWN,
-                    ActorLifecycle.SHUTDOWN,
-                    -> {
-                        false
-                    }
-                }
-            }
-
-        if (!shouldStop) {
+    suspend fun shutdown(timeout: Duration?) {
+        if (lifecycle.value == ActorLifecycle.SHUTDOWN) {
             terminated.await()
             cancelOwnedScope()
             return
         }
 
-        // Stop accepting new work immediately. Buffered commands may still drain unless we
-        // later escalate to loop cancellation.
-        mailbox.close()
-
-        suspend fun forceShutdown() {
-            failPendingCommands()
-            childScope.coroutineContext.job.cancel()
-            // Hard stop: cancel the actor loop and wait until final termination is observed.
-            loopJob.cancel()
-            terminated.await()
-        }
-
-        if (!gracefully) {
-            // Immediate shutdown skips graceful waiting entirely.
-            forceShutdown()
-            cancelOwnedScope()
-            return
-        }
-
-        if (timeout == null) {
-            // Unbounded graceful shutdown:
-            // 1. stop actor-owned side jobs/resources
-            // 2. stop owned children
-            // 3. allow normal loop termination
-            // 4. wait until termination is complete
-            preStop()
-            shutdownOwnedChildren()
-            terminated.await()
-            cancelOwnedScope()
-            return
-        }
-
-        val completedGracefully =
-            withTimeoutOrNull(timeout) {
-                // preStop is part of the graceful shutdown budget.
-                preStop()
-                shutdownOwnedChildren()
-                terminated.await()
-                true
-            } == true
-
-        if (!completedGracefully) {
-            // Graceful shutdown exceeded the timeout. Escalate to hard cancellation.
-            forceShutdown()
-        }
+        stopSignal.trySend(StopSignal(timeout = timeout))
+        terminated.await()
         cancelOwnedScope()
     }
 
-    private fun failPendingCommands() {
+    suspend fun awaitStarted() {
+        started.await()
+    }
+
+    fun registerWatcher(
+        watcher: ActorRuntime<*>,
+        token: Long,
+    ) {
         while (true) {
-            val buffered = mailbox.tryReceive().getOrNull() ?: return
-            onUndeliveredCommand(buffered, ActorUnavailableReason.NOT_DELIVERED)
-        }
-    }
-
-    /**
-     * Spawns an child actor under this actor's [childScope]. Owned children are stopped
-     * during parent shutdown. If [onTerminated] is provided, child termination is converted into a
-     * parent self-message.
-     */
-    internal suspend fun <ChildCommand : Any> spawnOwnedChild(
-        name: String,
-        dispatcher: CoroutineDispatcher? = null,
-        onTerminated: ((ChildTermination) -> Command)? = null,
-        factory: (ActorContext<ChildCommand>) -> Actor<ChildCommand>,
-    ): ActorRef<ChildCommand> {
-        val preparedScope = createActorScope(childScope, name, dispatcher)
-        val childContext = createActorContext<ChildCommand>(preparedScope, name)
-        val child = factory(childContext)
-        child.awaitStarted()
-        registerOwnedChild(child, onTerminated)
-        return childContext.self
-    }
-
-    /**
-     * Observes a child previously created through [spawnChild]. Watch notifications are best
-     * effort during shutdown: if the parent no longer accepts commands, the event is dropped.
-     */
-    internal fun watchChild(
-        child: ActorRef<*>,
-        onTerminated: (ChildTermination) -> Command,
-    ) {
-        val owned = children.firstOrNull { it.actor.ctx.self.label == child.label } ?: return
-        owned.watchers += onTerminated
-    }
-
-    private fun registerOwnedChild(
-        child: Actor<*>,
-        watcher: ((ChildTermination) -> Command)?,
-    ) {
-        val owned =
-            ActorChild(
-                actor = child,
-                watchers = mutableListOf<(ChildTermination) -> Command>(),
-            )
-        if (watcher != null) {
-            owned.watchers += watcher
-        }
-        children += owned
-        child.loopJob.invokeOnCompletion { cause ->
-            val normalizedCause =
-                when {
-                    child.terminalCause.value != null -> child.terminalCause.value
-                    cause is CancellationException && child.lifecycle.value == ActorLifecycle.SHUTDOWN -> null
-                    else -> cause
+            when (val state = watchState.value) {
+                is WatchState.Active -> {
+                    val updated = WatchState.Active(state.listeners + WatchRegistration(watcher, token))
+                    if (watchState.compareAndSet(state, updated)) {
+                        return
+                    }
                 }
-            val termination =
-                ChildTermination(
-                    childName = child.ctx.self.name,
-                    childLabel = child.ctx.self.label,
-                    cause = normalizedCause,
-                )
-            owned.watchers.forEach { watcherFn ->
-                ctx.self.tell(watcherFn(termination))
+
+                is WatchState.Terminated -> {
+                    watcher.enqueueWatchNotification(token, state.termination)
+                    return
+                }
             }
         }
     }
 
-    private suspend fun shutdownOwnedChildren() {
-        val children = children.toList()
-        children.forEach { owned ->
-            owned.actor.ctx.self.shutdown()
+    private fun enqueueWatchNotification(
+        token: Long,
+        termination: ActorTermination,
+    ) {
+        mailbox.trySend(MailboxEvent.WatchNotification(token, termination))
+    }
+
+    private suspend fun handleEvent(
+        actor: Actor<Command>,
+        ctx: DefaultActorContext<Command>,
+        event: MailboxEvent<Command>,
+    ) {
+        when (event) {
+            is MailboxEvent.UserCommand -> handleCommand(actor, ctx, event.command)
+            is MailboxEvent.WatchNotification -> {
+                val mapped = ctx.dispatchWatchNotification(event.token, event.termination) ?: return
+                handleCommand(actor, ctx, mapped)
+            }
         }
-        childScope.coroutineContext.job.cancel()
+    }
+
+    private suspend fun handleCommand(
+        actor: Actor<Command>,
+        ctx: ActorContext<Command>,
+        command: Command,
+    ) {
+        try {
+            actor.handle(ctx, command)
+        } catch (t: Throwable) {
+            terminalCause.value = t
+            actor.onCommandFailure(ctx, command, t)
+            mailbox.close(t)
+            dropPendingEvents(actor, ctx)
+            throw t
+        }
+    }
+
+    private suspend fun drainMailbox(
+        actor: Actor<Command>,
+        ctx: DefaultActorContext<Command>,
+    ) {
+        while (true) {
+            val event = mailbox.receiveCatching().getOrNull() ?: return
+            handleEvent(actor, ctx, event)
+        }
+    }
+
+    private fun dropPendingEvents(
+        actor: Actor<Command>,
+        ctx: ActorContext<Command>,
+    ) {
+        while (true) {
+            when (val event = mailbox.tryReceive().getOrNull() ?: return) {
+                is MailboxEvent.UserCommand -> {
+                    actor.onUndeliveredCommand(ctx, event.command, ActorUnavailableReason.NOT_DELIVERED)
+                }
+
+                is MailboxEvent.WatchNotification -> Unit
+            }
+        }
+    }
+
+    private fun notifyStart() {
+        started.complete(Unit)
+    }
+
+    private fun notifyStartFail(cause: Throwable) {
+        if (!started.isCompleted) {
+            started.completeExceptionally(cause)
+        }
+    }
+
+    private fun notifyTermination() {
+        if (!terminated.isCompleted) {
+            terminated.complete(Unit)
+        }
+    }
+
+    private fun publishTermination() {
+        val termination =
+            ActorTermination(
+                actorName = name,
+                actorLabel = label,
+                cause = terminalCause.value,
+            )
+
+        while (true) {
+            when (val state = watchState.value) {
+                is WatchState.Active -> {
+                    if (watchState.compareAndSet(state, WatchState.Terminated(termination))) {
+                        state.listeners.forEach { listener ->
+                            listener.watcher.enqueueWatchNotification(listener.token, termination)
+                        }
+                        return
+                    }
+                }
+
+                is WatchState.Terminated -> return
+            }
+        }
     }
 
     private fun cancelOwnedScope() {
@@ -442,17 +373,6 @@ abstract class Actor<Command : Any>(
         }
     }
 }
-
-data class ChildTermination(
-    val childName: String,
-    val childLabel: String,
-    val cause: Throwable?,
-)
-
-private data class ActorChild<ParentCommand : Any>(
-    val actor: Actor<*>,
-    val watchers: MutableList<(ChildTermination) -> ParentCommand>,
-)
 
 private data object OwnedActorScope :
     AbstractCoroutineContextElement(Key) {
@@ -463,6 +383,31 @@ private fun ReplyRequest<*>.failRequest(cause: Throwable) {
     @Suppress("UNCHECKED_CAST")
     (replyTo as ReplyChannel<Any?>).failure(cause)
 }
+
+private fun <T> ChannelResult<T>.toActorResult(
+    reason: ActorUnavailableReason,
+    label: String,
+): Result<Unit> =
+    when {
+        isSuccess -> Result.success(Unit)
+        isClosed ->
+            Result.failure(
+                ActorUnavailable(
+                    reason = reason,
+                    label = label,
+                    cause = exceptionOrNull(),
+                ),
+            )
+
+        else ->
+            Result.failure(
+                ActorUnavailable(
+                    reason = ActorUnavailableReason.MAILBOX_FULL,
+                    label = label,
+                    cause = exceptionOrNull(),
+                ),
+            )
+    }
 
 private fun createActorScope(
     parentScope: CoroutineScope,
@@ -478,19 +423,19 @@ private fun createActorScope(
     return CoroutineScope(scopeContext)
 }
 
-/**
- * Starts an actor in a scope derived from the current coroutine context, waits for startup to
- * complete, and returns its typed ref.
- */
 suspend fun <Command : Any> spawn(
     name: String,
     dispatcher: CoroutineDispatcher? = null,
-    factory: (ctx: ActorContext<Command>) -> Actor<Command>,
+    factory: () -> Actor<Command>,
 ): ActorRef<Command> {
+    val actor = factory()
     val parentScope = CoroutineScope(currentCoroutineContext())
-    val scope = createActorScope(parentScope, name, dispatcher)
-    val ctx = createActorContext<Command>(scope, name)
-    val actor = factory(ctx)
-    actor.awaitStarted()
-    return ctx.self
+    val id = nextActorInstanceId.incrementAndGet()
+    val label = "$name#$id"
+    val runtime = ActorRuntime(name = name, label = label, parentScope = parentScope, dispatcher = dispatcher, actor = actor)
+    val ref = DefaultActorRef(name = name, label = label, runtime = runtime)
+    runtime.attachRef(ref)
+    runtime.start(actor)
+    runtime.awaitStarted()
+    return ref
 }
