@@ -11,10 +11,11 @@ These documents are the active source of truth for the new parallel `streams` li
 - [streams-delivery-phases.md](plans/streams-delivery-phases.md)
 - [streams-delivery-additions.md](plans/streams-delivery-additions.md)
 - [streams-technical-requirements.md](plans/streams-technical-requirements.md)
+- [streams-phase-2-fix-plan.md](plans/streams-phase-2-fix-plan.md)
 - [streams-example-earthquake-enrichment.md](plans/streams-example-earthquake-enrichment.md)
 - [minimal-actors.md](plans/minimal-actors.md)
 
-Read them in that order. `streams-delivery-additions.md` supplements `streams-delivery-phases.md` with critical fixes, architecture decisions, and the Postgres schema reference — read it alongside or immediately after the phases doc. `streams-technical-requirements.md` covers orthogonal runtime concerns (default values, error handling, DB performance, pipeline registry, and code organization) — read it before implementing Phase 2 or application wiring.
+Read them in that order. `streams-delivery-additions.md` supplements `streams-delivery-phases.md` with critical fixes, architecture decisions, and the Postgres schema reference — read it alongside or immediately after the phases doc. `streams-technical-requirements.md` covers orthogonal runtime concerns (default values, error handling, DB performance, pipeline registry, and code organization) — read it before implementing Phase 2 or application wiring. `streams-phase-2-fix-plan.md` is the concrete remediation checklist for the current runtime/store drift and should be read before declaring Phase 2 complete or starting Phase 3.
 
 ## Runtime-Local Notes
 

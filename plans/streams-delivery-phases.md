@@ -42,6 +42,7 @@ Still open:
 - [ ] explicit watchdog test proving expired `IN_PROGRESS` items are reclaimed and resumed
 - [ ] per-step concurrency configuration beyond the current single worker per step
 - [ ] resume-existing-runs flow (`resumeRuns`) that reclaims leases before re-execution
+- [ ] implementation drift called out in `streams-phase-2-fix-plan.md` is resolved before Phase 3 begins
 
 ### Phase 3 — Durable Postgres Store (not started)
 - [ ] Postgres/sqlx4k store implementation
