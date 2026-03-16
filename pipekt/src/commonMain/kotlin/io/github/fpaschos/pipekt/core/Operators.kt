@@ -3,7 +3,7 @@ package io.github.fpaschos.pipekt.core
 import kotlin.reflect.KType
 
 /**
- * Base type for all pipeline operators: source, steps, filter, and persist-each.
+ * Base type for all pipeline operators: source, steps, and filter.
  *
  * Every operator has a [name] that must be unique within a pipeline (including the source name).
  * Used in [PipelineDefinition.operators] and for validation.
@@ -71,14 +71,4 @@ data class FilterDef<T>(
     val filteredReason: FilteredReason = FilteredReason.BELOW_THRESHOLD,
     val predicate: StepFn<T, Boolean>,
     val inputType: KType,
-) : OperatorDef()
-
-/**
- * Persist-each boundary: marks a point after which each item is durably checkpointed before
- * proceeding to the next step. No function; the runtime handles persistence.
- *
- * @param name Unique step name for this boundary.
- */
-data class PersistEachDef(
-    override val name: String,
 ) : OperatorDef()

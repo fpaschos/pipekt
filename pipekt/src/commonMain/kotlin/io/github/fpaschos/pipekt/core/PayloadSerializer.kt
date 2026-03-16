@@ -36,7 +36,7 @@ interface PayloadSerializer {
 }
 
 /**
- * Default [PayloadSerializer] using kotlinx.serialization with [Json].
+ * Default [PayloadSerializer] using kotlinx serialization with [Json].
  *
  * Configured with [ignoreUnknownKeys = true] so schema evolution does not break deserialization
  * of older stored payloads.

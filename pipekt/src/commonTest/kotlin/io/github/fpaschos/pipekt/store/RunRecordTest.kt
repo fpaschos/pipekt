@@ -1,5 +1,6 @@
 package io.github.fpaschos.pipekt.store
 
+import io.kotest.assertions.assertSoftly
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldNotBeBlank
@@ -28,11 +29,13 @@ class RunRecordTest :
                     createdAt = createdAt,
                     updatedAt = updatedAt,
                 )
-            r.id.shouldNotBeBlank()
-            r.pipeline.shouldBe("p")
-            r.planVersion.shouldBe("v1")
-            r.status.shouldBe("ACTIVE")
-            r.createdAt.shouldBe(createdAt)
-            r.updatedAt.shouldBe(updatedAt)
+            assertSoftly(r) {
+                id.shouldNotBeBlank()
+                pipeline shouldBe "p"
+                planVersion shouldBe "v1"
+                status shouldBe "ACTIVE"
+                createdAt shouldBe createdAt
+                updatedAt shouldBe updatedAt
+            }
         }
     })

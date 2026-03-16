@@ -1,6 +1,7 @@
 package io.github.fpaschos.pipekt.store
 
 import io.github.fpaschos.pipekt.core.WorkItemStatus
+import io.kotest.assertions.assertSoftly
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import kotlin.time.Instant
@@ -28,7 +29,6 @@ class WorkItemTest :
                     currentStep = "step1",
                     status = WorkItemStatus.PENDING,
                     payloadJson = """{"x":1}""",
-                    lastErrorJson = null,
                     attemptCount = 0,
                     leaseOwner = null,
                     leaseExpiry = null,
@@ -36,18 +36,19 @@ class WorkItemTest :
                     createdAt = createdAt,
                     updatedAt = updatedAt,
                 )
-            w.id.shouldBe("item-1")
-            w.runId.shouldBe("run-1")
-            w.sourceId.shouldBe("src-1")
-            w.currentStep.shouldBe("step1")
-            w.status.shouldBe(WorkItemStatus.PENDING)
-            w.payloadJson.shouldBe("""{"x":1}""")
-            w.lastErrorJson.shouldBe(null)
-            w.attemptCount.shouldBe(0)
-            w.leaseOwner.shouldBe(null)
-            w.leaseExpiry.shouldBe(null)
-            w.retryAt.shouldBe(null)
-            w.createdAt.shouldBe(createdAt)
-            w.updatedAt.shouldBe(updatedAt)
+            assertSoftly(w) {
+                id shouldBe "item-1"
+                runId shouldBe "run-1"
+                sourceId shouldBe "src-1"
+                currentStep shouldBe "step1"
+                status shouldBe WorkItemStatus.PENDING
+                payloadJson shouldBe """{"x":1}"""
+                attemptCount shouldBe 0
+                leaseOwner shouldBe null
+                leaseExpiry shouldBe null
+                retryAt shouldBe null
+                createdAt shouldBe createdAt
+                updatedAt shouldBe updatedAt
+            }
         }
     })

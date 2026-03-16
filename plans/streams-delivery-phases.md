@@ -4,7 +4,7 @@
 
 ### Phase 1A — DSL + Validation (complete)
 - [x] core types (StepCtx, StepFn, RetryPolicy, FilteredReason, ItemFailure)
-- [x] operator definitions (SourceDef, StepDef, FilterDef, PersistEachDef)
+- [x] operator definitions (SourceDef, StepDef, FilterDef)
 - [x] SourceAdapter contract
 - [x] PayloadSerializer interface + KotlinxPayloadSerializer
 - [x] PipelineDefinition + validate() + DSL builder (build() returns Either; errors: DuplicateStepName, NoSourceDefined, EmptyPipeline, InvalidMaxInFlight, TypeMismatch)
@@ -16,9 +16,42 @@
 - [x] WorkItemStatus remains in core; store depends on core for IngressRecord and WorkItemStatus
 - [x] Removed AppendIngressResult enum from core in favor of store's bulk result type
 
-### Phase 1C — InMemoryStore + FakeSourceAdapter (not started)
+### Phase 1C — InMemoryStore + FakeSourceAdapter (complete)
+- [x] `InMemoryStore` implements append / claim / checkpoint / backpressure / lease reclaim semantics
+- [x] `FakeSourceAdapter` exists for runtime tests
 
-### Phase 1D — InMemoryRuntime + happy-path tests (not started)
+### Phase 1D — PipelineRuntime + happy-path tests (complete)
+- [x] runtime serializes ingress payloads, appends to store, and acks only after durable append
+- [x] runtime executes steps / filters and checkpoints success, filtered, and failed outcomes
+- [x] actor-backed happy-path runtime test passing
+
+### Phase 2 — Runtime And Backpressure (in progress)
+
+Implemented:
+- [x] ingestion loop separated from per-step worker loops
+- [x] ingestion uses `countNonTerminal` to cap intake by `maxInFlight`
+- [x] worker loops claim by step and checkpoint atomically through the store SPI
+- [x] retry scheduling uses `retryAt` based on `RetryPolicy`
+- [x] store-scoped lease reclaimer / watchdog loop exists
+- [x] lease reclaim is testable in-memory
+- [x] actor-backed `PipelineOrchestrator` can start / inspect / stop active runtimes
+
+Still open:
+- [ ] explicit backpressure test proving ingestion stops while slow workers hold `maxInFlight`
+- [ ] explicit retry timing test proving backoff delay between attempts
+- [ ] explicit watchdog test proving expired `IN_PROGRESS` items are reclaimed and resumed
+- [ ] per-step concurrency configuration beyond the current single worker per step
+- [ ] resume-existing-runs flow (`resumeRuns`) that reclaims leases before re-execution
+- [ ] implementation drift called out in `streams-phase-2-fix-plan.md` is resolved before Phase 3 begins
+
+### Phase 3 — Durable Postgres Store (not started)
+- [ ] Postgres/sqlx4k store implementation
+- [ ] migrations / schema files
+- [ ] recovery tests against durable state
+
+### Phase 4 — AMQP Source Adapter (not started)
+
+### Phase 5 — Loyalty Reference Example (not started)
 
 ---
 
@@ -262,7 +295,7 @@ Validate that the generic engine supports the intended loyalty workflow end to e
 
 - loyalty domain types
 - loyalty step implementations
-- INFINITE reference pipeline: `filter → step → persistEach → step` (continuous ingress, no barrier, no finalizer; sequential phase is a second step — concurrency limits are a runtime concern, not in the DSL in v1)
+- INFINITE reference pipeline: `filter → step → step` (continuous ingress, no barrier, no finalizer; sequential phase is a second step — concurrency limits are a runtime concern, not in the DSL in v1)
 - acceptance tests for restart, retries, sequential phase, and reclaim
 - acceptance tests for continuous ingress and per-item completion
 - verify `payload_json` is nulled on terminal checkpoint
@@ -293,6 +326,7 @@ Integrate the validated `streams` library into the actual service composition mo
 
 ### Scope
 
+- **pipeline registry/manager** (`PipelineManager`): a central component that owns one `PipelineRuntime` per registered `PipelineDefinition`, providing `startPipeline`, `stopPipeline`, `listPipelines`, and `getRuntime` operations. Specified in `streams-technical-requirements.md`; implemented in this layer, not in `pipekt` commonMain.
 - lifecycle ownership for 3-5 concurrent pipelines per service instance
 - DI wiring
 - tracing/context propagation bridges

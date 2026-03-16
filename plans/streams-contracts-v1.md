@@ -88,9 +88,9 @@ Validation must reject:
 
 - duplicate step names (source name and all operator names must be unique)
 - no source defined (at least one call to `source(name, adapter)` required)
-- empty pipeline (at least one step, filter, or persistEach required)
+- empty pipeline (at least one step or filter required)
 - invalid maxInFlight (must be > 0)
-- invalid type chain between adjacent operators (each operator's input type must match the previous output; PersistEachDef and FilterDef are type-transparent)
+- invalid type chain between adjacent operators (each operator's input type must match the previous output; FilterDef is type-transparent)
 
 In v1, `PipelineDefinition` is a stable public concept. Any executable runtime plan derived from it may remain internal to the runtime package.
 

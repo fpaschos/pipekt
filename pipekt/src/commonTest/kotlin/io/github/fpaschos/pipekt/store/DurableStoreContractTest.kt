@@ -2,6 +2,7 @@ package io.github.fpaschos.pipekt.store
 
 import io.github.fpaschos.pipekt.core.IngressRecord
 import io.github.fpaschos.pipekt.core.WorkItemStatus
+import io.kotest.assertions.assertSoftly
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import kotlin.time.Duration
@@ -26,7 +27,7 @@ class DurableStoreContractTest :
 
             val store =
                 object : DurableStore {
-                    override suspend fun getOrCreateRun(
+                    override suspend fun findOrCreateRun(
                         pipeline: String,
                         planVersion: String,
                     ): RunRecord =
@@ -39,13 +40,14 @@ class DurableStoreContractTest :
                             updatedAt = t1,
                         )
 
-                    override suspend fun getRun(runId: String): RunRecord? = null
+                    override suspend fun findRun(runId: String): RunRecord? = null
 
-                    override suspend fun listActiveRuns(pipeline: String): List<RunRecord> = emptyList()
+                    override suspend fun findAllActiveRuns(pipeline: String): List<RunRecord> = emptyList()
 
                     override suspend fun appendIngress(
                         runId: String,
                         records: List<IngressRecord<*>>,
+                        firstStep: String,
                     ): AppendIngressResult = AppendIngressResult(appended = 0, duplicates = 0)
 
                     override suspend fun claim(
@@ -83,13 +85,17 @@ class DurableStoreContractTest :
 
             val t3 = Instant.fromEpochMilliseconds(3000L)
 
-            val run = store.getOrCreateRun("p", "v1")
-            run.pipeline.shouldBe("p")
-            store.getRun("run-1") shouldBe null
-            store.listActiveRuns("p") shouldBe emptyList()
+            val run = store.findOrCreateRun("p", "v1")
+            assertSoftly(run) {
+                pipeline shouldBe "p"
+            }
+            store.findRun("run-1") shouldBe null
+            store.findAllActiveRuns("p") shouldBe emptyList()
             val appendResult = store.appendIngress("run-1", emptyList())
-            appendResult.appended.shouldBe(0)
-            appendResult.duplicates.shouldBe(0)
+            assertSoftly(appendResult) {
+                appended shouldBe 0
+                duplicates shouldBe 0
+            }
             store.claim("step1", "run-1", 10, Duration.parse("5s"), "worker-1") shouldBe emptyList()
             val item =
                 WorkItem(
@@ -99,7 +105,6 @@ class DurableStoreContractTest :
                     currentStep = "step1",
                     status = WorkItemStatus.PENDING,
                     payloadJson = "{}",
-                    lastErrorJson = null,
                     attemptCount = 0,
                     leaseOwner = null,
                     leaseExpiry = null,

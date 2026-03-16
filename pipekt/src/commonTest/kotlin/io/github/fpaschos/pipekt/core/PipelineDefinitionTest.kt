@@ -16,10 +16,10 @@ import kotlin.reflect.typeOf
  * - [PipelineDefinition.retentionDays]: default 30 and override.
  * - Validation errors: duplicate step names (including source/step name clash), no source defined,
  *   empty operators, invalid or negative maxInFlight; multiple errors reported together.
- * - DSL builder: [PipelineBuilder] as block receiver; source, step, filter, persistEach are
- *   independent statements — no chaining.
+ * - DSL builder: [PipelineBuilder] as block receiver; source, step, filter are independent
+ *   statements — no chaining.
  * - Type-chain validation via [validate]: [PipelineValidationError.TypeMismatch] for step/filter
- *   input type mismatches; [PersistEachDef] is transparent; valid same-type chains pass.
+ *   input type mismatches; valid same-type chains pass.
  *   Type mismatches tested via [validate] directly (runtime-only enforcement).
  */
 class PipelineDefinitionTest :
@@ -93,7 +93,15 @@ class PipelineDefinitionTest :
                     name = "no-source",
                     source = null,
                     sourceType = typeOf<String>(),
-                    operators = listOf(PersistEachDef("step1")),
+                    operators =
+                        listOf(
+                            StepDef(
+                                name = "step1",
+                                fn = { _: String -> "" },
+                                inputType = typeOf<String>(),
+                                outputType = typeOf<String>(),
+                            ),
+                        ),
                     maxInFlight = 10,
                 ).shouldBeLeft()
             errors.filterIsInstance<PipelineValidationError.NoSourceDefined>().shouldContainExactlyInAnyOrder(
@@ -122,7 +130,15 @@ class PipelineDefinitionTest :
                     name = "bad-flight",
                     source = SourceDef("src", fakeAdapter()),
                     sourceType = typeOf<String>(),
-                    operators = listOf(PersistEachDef("step1")),
+                    operators =
+                        listOf(
+                            StepDef(
+                                name = "step1",
+                                fn = { _: String -> "" },
+                                inputType = typeOf<String>(),
+                                outputType = typeOf<String>(),
+                            ),
+                        ),
                     maxInFlight = 0,
                 ).shouldBeLeft()
             errors.filterIsInstance<PipelineValidationError.InvalidMaxInFlight>().shouldContainExactlyInAnyOrder(
@@ -143,7 +159,15 @@ class PipelineDefinitionTest :
                     name = "bad-flight",
                     source = SourceDef("src", fakeAdapter()),
                     sourceType = typeOf<String>(),
-                    operators = listOf(PersistEachDef("step1")),
+                    operators =
+                        listOf(
+                            StepDef(
+                                name = "step1",
+                                fn = { _: String -> "" },
+                                inputType = typeOf<String>(),
+                                outputType = typeOf<String>(),
+                            ),
+                        ),
                     maxInFlight = -5,
                 ).shouldBeLeft()
             errors.filterIsInstance<PipelineValidationError.InvalidMaxInFlight>().shouldContainExactlyInAnyOrder(
@@ -212,15 +236,6 @@ class PipelineDefinitionTest :
             mismatch.stepName shouldBe "expects-string"
             mismatch.expected shouldBe typeOf<String>()
             mismatch.actual shouldBe typeOf<Int>()
-        }
-
-        test("PersistEachDef is transparent in the type chain") {
-            pipeline("chain-persist", maxInFlight = 10) {
-                source("src", fakeAdapter())
-                step("step1") { it: String -> it }
-                persistEach("checkpoint")
-                step("step2") { it: String -> it }
-            }.shouldBeRight()
         }
 
         test("filter with matching input type passes type-chain validation") {

@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "skills": {
+    "kotlin-multiplatform": {
+      "source": "vitorpamplona/amethyst",
+      "sourceType": "github",
+      "computedHash": "1d743e45b52c1f9bd1449f7d3662bceaa7bb16e2a6c94385c5bb9d041a00c73e"
+    },
+    "kotlin-specialist": {
+      "source": "jeffallan/claude-skills",
+      "sourceType": "github",
+      "computedHash": "7d44fcb668a32ca4f4bdbcf7f42c21ef426bed2bb8d7244d0b6de9419dac1a33"
+    }
+  }
+}
