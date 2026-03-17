@@ -174,7 +174,7 @@ Possible future additions:
 
 Potential value:
 
-- broader reuse of the library outside loyalty
+- broader reuse of the library across multiple application domains
 
 Why deferred:
 
@@ -273,7 +273,7 @@ This engine's differentiating properties over in-memory engines:
 - stateful joins across streams
 - exactly-once semantics via distributed checkpointing
 
-These are not part of v1 and are explicitly deferred (see Section 3 — Advanced Runtime Execution, and the DAG operator discussion in operator expansion ideas). The loyalty use case requires a linear pipeline with durable item state — not DAG topology or windowed aggregation.
+These are not part of v1 and are explicitly deferred (see Section 3 — Advanced Runtime Execution, and the DAG operator discussion in operator expansion ideas). The current v1 target requires a linear pipeline with durable item state - not DAG topology or windowed aggregation.
 
 ### Closest Conceptual Match: Temporal.io
 
@@ -297,7 +297,7 @@ DataFusion is relevant only as inspiration for the logical/physical plan separat
 Revisit future planning features only after the MVP proves:
 
 - the core contracts are stable
-- the loyalty reference flow works end to end in INFINITE mode
+- at least one reference workflow works end to end in INFINITE mode
 - the AMQP adapter integrates cleanly
 - restart and recovery semantics are correct
 - storage growth is bounded under production workload

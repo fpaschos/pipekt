@@ -21,7 +21,7 @@ typealias StepFn<I, O, E> = context(Raise<E>, StepCtx)
 (I) -> O
 ```
 
-This means step functions cannot call any suspending API — no Ktor HTTP client, no coroutine-based DB access, no `delay`. All real loyalty steps (eligibility check, policy fetch, phase2 call) are suspend operations. The compiler will reject them with the current definition.
+This means step functions cannot call any suspending API - no Ktor HTTP client, no coroutine-based DB access, no `delay`. Any real production step that calls downstream services will need suspend support. The compiler will reject them with the current definition.
 
 ### Fix
 
@@ -36,7 +36,7 @@ The `either { }` block in the runtime is already suspend-capable. No other chang
 
 ### Phase
 
-Fix immediately, before any real step implementation is attempted. This is a prerequisite for Phase 5 (loyalty reference example).
+Fix immediately, before any real step implementation is attempted. This is a prerequisite for Phase 5 (reference example).
 
 ---
 
@@ -306,11 +306,11 @@ The contract for step authors:
 - For systems that do not support idempotency keys, accept at-least-once delivery and design consumers to tolerate duplicates.
 - Avoid publishing to external systems before all computation in the step is complete. If unavoidable, split into two steps: one that computes and checkpoints, one that publishes.
 
-This contract must be documented in the loyalty reference example (Phase 5) with a concrete example using `stepCtx.itemId`.
+This contract should be documented in the Phase 5 reference example with a concrete example using `stepCtx.itemId`.
 
 ### Phase
 
-Document in Phase 5 loyalty example. No engine change required.
+Document in Phase 5 reference example. No engine change required.
 
 ---
 
@@ -550,7 +550,7 @@ This is a design pattern, not an engine feature. The `SourceAdapter` contract al
 
 ### Phase
 
-Design note. Document in Phase 4 (AMQP adapter) and Phase 5 (loyalty reference example) as a guidance pattern for adapter implementors.
+Design note. Document in Phase 4 (AMQP adapter) and Phase 5 (reference example) as a guidance pattern for adapter implementors.
 
 ---
 

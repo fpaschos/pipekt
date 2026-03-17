@@ -51,13 +51,13 @@ Still open:
 
 ### Phase 4 — AMQP Source Adapter (not started)
 
-### Phase 5 — Loyalty Reference Example (not started)
+### Phase 5 — Reference Example (not started)
 
 ---
 
 ## Summary
 
-This document turns the `streams` architecture into an implementation sequence. The order is designed to validate contracts early, keep the loyalty example anchored to generic APIs, and postpone kt-framework integration until the core library is proven.
+This document turns the `streams` architecture into an implementation sequence. The order is designed to validate contracts early, keep the reference example anchored to generic APIs, and postpone kt-framework integration until the core library is proven.
 
 The production workload is: **infinite streams, thousands of messages per day growing to millions, 3-5 concurrent pipelines per instance**. All phases must be evaluated against this workload.
 
@@ -87,7 +87,7 @@ Create the minimum runnable `streams` engine with no external infrastructure dep
 ### Entry Criteria
 
 - `streams-contracts-v1.md` is accepted as the source of truth
-- package layout under `...loyalty.streams` is fixed
+- package layout under the core `pipekt` modules is fixed
 
 ### Exit Criteria
 
@@ -285,17 +285,17 @@ Connect RabbitMQ to the generic source contract without changing core engine con
 
 ---
 
-## Phase 5: Loyalty Reference Example
+## Phase 5: Reference Example
 
 ### Goal
 
-Validate that the generic engine supports the intended loyalty workflow end to end as a continuous INFINITE pipeline.
+Validate that the generic engine supports at least one real workflow end to end as a continuous INFINITE pipeline.
 
 ### Scope
 
-- loyalty domain types
-- loyalty step implementations
-- INFINITE reference pipeline: `filter → step → step` (continuous ingress, no barrier, no finalizer; sequential phase is a second step — concurrency limits are a runtime concern, not in the DSL in v1)
+- example domain types
+- example step implementations
+- INFINITE reference pipeline: `filter -> step -> step` (continuous ingress, no barrier, no finalizer; sequential phase is a second step - concurrency limits are a runtime concern, not in the DSL in v1)
 - acceptance tests for restart, retries, sequential phase, and reclaim
 - acceptance tests for continuous ingress and per-item completion
 - verify `payload_json` is nulled on terminal checkpoint
@@ -307,8 +307,8 @@ Validate that the generic engine supports the intended loyalty workflow end to e
 
 ### Exit Criteria
 
-- the loyalty flow runs on generic operators only
-- no loyalty-specific logic is added to core runtime
+- the example flow runs on generic operators only
+- no example-specific logic is added to core runtime
 - acceptance tests cover the intended business path and failure path
 
 ### Deferred
@@ -347,7 +347,7 @@ Integrate the validated `streams` library into the actual service composition mo
 
 ### Entry Criteria
 
-- loyalty example proves the engine shape
+- reference example proves the engine shape
 - no open questions remain about core contracts
 
 ### Exit Criteria
@@ -429,7 +429,7 @@ Tests must accumulate by phase rather than being postponed:
   - durable append before ack (bulk)
   - nack/retry behavior
 - phase 5:
-  - full INFINITE loyalty acceptance with fault injection
+  - full INFINITE example acceptance with fault injection
   - continuous ingress and per-item completion
 - phase 6:
   - service bootstrap and lifecycle correctness for multiple concurrent pipelines
@@ -442,6 +442,6 @@ Implementation can start when:
 
 - the five `streams` planning docs exist and agree with each other
 - contracts are stable enough to implement phase 1 without new design work
-- the loyalty flow is clearly separated from core engine concerns
+- example flows are clearly separated from core engine concerns
 - INFINITE-only pipeline mode is documented and `BOUNDED` is explicitly deferred
 - kt-framework integration is explicitly postponed, not ambiguous

@@ -4,7 +4,6 @@
 
 These documents are the active source of truth for the current `pipekt` core module and its stream-processing runtime:
 
-- [streams-current-state-and-legacy-boundary.md](./specs/streams-current-state-and-legacy-boundary.md)
 - [streams-core-architecture.md](./specs/streams-core-architecture.md)
 - [streams-contracts-v1.md](./specs/streams-contracts-v1.md)
 - [streams-delivery-phases.md](./specs/streams-delivery-phases.md)

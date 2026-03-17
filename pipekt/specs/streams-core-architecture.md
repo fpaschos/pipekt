@@ -4,7 +4,7 @@
 
 This document defines the target architecture for the new parallel `streams` library inside `pipekt`.
 
-The goal is to create a framework-agnostic durable stream-processing library that can later be integrated with kt framework, RabbitMQ, and the loyalty workflow without coupling the core engine to any of them.
+The goal is to create a framework-agnostic durable stream-processing library that can later be integrated with kt framework, RabbitMQ, and real application workflows without coupling the core engine to any of them.
 
 For v1, the library uses a minimal separation between:
 
@@ -37,7 +37,7 @@ Kafka Streams and Apache Flink support DAG topologies, time-windowed aggregation
 - windowed aggregation — requires time-window state that the current item model does not support
 - stateful joins across streams — requires cross-item state beyond what `payloadJson` carries
 
-These are deferred not because they are impossible on this architecture, but because the loyalty use case does not need them and they would significantly increase implementation complexity before the core correctness properties are proven.
+These are deferred not because they are impossible on this architecture, but because the current v1 target does not need them and they would significantly increase implementation complexity before the core correctness properties are proven.
 
 ### Closest Conceptual Match: Temporal.io
 
@@ -115,11 +115,11 @@ Responsibilities:
 
 This package must not become the engine entrypoint. It is an adapter only.
 
-### `io.github.fpaschos.pipekt.examples.loyalty`
+### `io.github.fpaschos.pipekt.examples`
 
 Responsibilities:
 
-- reference workflow for the loyalty business process
+- reference workflows built on top of the generic engine
 - concrete step definitions using generic operators
 - acceptance-level validation of the new API
 - demonstrates an INFINITE (continuous ingress) pipeline
@@ -266,4 +266,4 @@ The following are explicitly out of scope for the first pass:
 - `pipekt.runtime` may compile definitions into an internal executable plan, but that plan stays a runtime implementation detail in v1.
 - `pipekt.runtime` runs three independent coroutine loops: ingestion, per-step workers, and watchdog.
 - `pipekt.adapters.amqp` adapts RabbitMQ into ingress records and ack behavior only.
-- kt framework gets a separate integration document and package later, after the loyalty example proves the API shape.
+- kt framework gets a separate integration document and package later, after reference examples prove the API shape.
