@@ -4,9 +4,9 @@
 
 **Status:** Superseded in part by the actor-based runtime architecture. This document now records the old-code problems and the constraints the new design must satisfy.
 
-**Related:** [actor-based-runtime.md](/Users/fpaschos/Dev/pipekt/pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/runtime/new/actor-based-runtime.md), [streams-contracts-v1.md](streams-contracts-v1.md), [streams-technical-requirements.md](streams-technical-requirements.md), [streams-delivery-phases.md](streams-delivery-phases.md).
+**Related:** [actor-based-runtime.md](../src/commonMain/kotlin/io/github/fpaschos/pipekt/runtime/new/actor-based-runtime.md), [streams-contracts-v1.md](streams-contracts-v1.md), [streams-technical-requirements.md](streams-technical-requirements.md), [streams-delivery-phases.md](streams-delivery-phases.md).
 
-**Source of truth:** [actor-based-runtime.md](/Users/fpaschos/Dev/pipekt/pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/runtime/new/actor-based-runtime.md) is the active architecture reference for `runtime.new`. Where this document conflicts with it, the actor-based runtime document wins.
+**Source of truth:** [actor-based-runtime.md](../src/commonMain/kotlin/io/github/fpaschos/pipekt/runtime/new/actor-based-runtime.md) is the active architecture reference for `runtime.new`. Where this document conflicts with it, the actor-based runtime document wins.
 
 ---
 

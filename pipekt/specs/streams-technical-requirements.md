@@ -100,44 +100,21 @@ Emit `NOTIFY work_items_available` (or a per-step / per-pipeline channel name) i
 
 ## Pipeline registry and management
 
-A single `PipelineRuntime` owns execution of one `PipelineDefinition`. A server running 3–5 or more concurrent pipelines needs a **central component** above the runtime to own, start, stop, and enumerate pipeline instances.
+A single `PipelineRuntime` owns execution of one `PipelineDefinition`. A server running 3-5 or more concurrent pipelines needs a **central component** above the runtime to own, start, stop, and enumerate pipeline instances.
 
-**Where it lives:** Application or framework layer (e.g. Phase 6 kt-framework integration), **not** in `pipekt` `commonMain`. The library stays a single-runtime-per-definition engine.
+**Where it lives:** In the current implementation this role is provided by `PipelineOrchestrator` in `pipekt.runtime.new`. Applications and frameworks own the orchestrator instance, but the orchestration API itself is part of the library.
 
-**Concept.** A `PipelineManager` (or equivalent) holds a map of `pipelineName → PipelineRuntime` and provides:
-- `startPipeline(definition, serializer, planVersion)` — create and start a `PipelineRuntime`; register it.
-- `stopPipeline(name)` — stop and deregister.
-- `listPipelines(): Set<String>` — enumerate active pipeline names.
-- `getRuntime(name): PipelineRuntime?` — access a specific runtime.
+**Concept.** `PipelineOrchestrator` holds the active executable registry and provides:
+- `startPipeline(definition, planVersion, config)` - create and start a pipeline runtime; register it.
+- `stopPipeline(executableId, timeout)` - stop and deregister one active executable.
+- `inspectPipeline(executableId)` / `listActivePipelines()` - inspect current runtime-owned state.
+- `stopAll(timeout)` / `shutdown(timeout)` - stop all active executables and terminate orchestrator-owned background work.
 
-Pipeline health and in-flight counts can be derived via `DurableStore.listActiveRuns(pipeline)` and `DurableStore.countNonTerminal(runId)` for observability.
+Pipeline health and in-flight counts can be derived via `PipelineExecutableSnapshot`, `DurableStore.findAllActiveRuns(pipeline)`, and `DurableStore.countNonTerminal(runId)` for observability.
 
-**Concurrency.** If pipelines can be started or stopped dynamically (after server bootstrap), the manager's mutable map must be protected. Two valid approaches:
+**Concurrency.** The current implementation uses an actor-backed orchestrator. Registry mutation and runtime ownership are serialized through actor messages, which removes the old shared mutable `PipelineRuntime` ownership problem.
 
-**Option A — `Mutex` (KMP-portable):**
-```kotlin
-private val mutex = Mutex()
-private val runtimes = mutableMapOf<String, PipelineRuntime>()
-
-suspend fun startPipeline(...) = mutex.withLock { /* create, start, register */ }
-suspend fun stopPipeline(name: String) = mutex.withLock { runtimes.remove(name)?.stop() }
-suspend fun listPipelines(): Set<String> = mutex.withLock { runtimes.keys.toSet() }
-```
-
-**Option B — Actor/channel (single-writer, no lock contention):**
-```kotlin
-sealed interface ManagerMsg {
-    data class Start(val def: PipelineDefinition, val reply: CompletableDeferred<Unit>) : ManagerMsg
-    data class Stop(val name: String, val reply: CompletableDeferred<Unit>) : ManagerMsg
-    data class List(val reply: CompletableDeferred<Set<String>>) : ManagerMsg
-}
-// Single coroutine in scope processes inbox; mutable map is never shared
-private val inbox = Channel<ManagerMsg>(Channel.UNLIMITED)
-```
-
-If pipelines are only registered at server startup and never changed afterward, neither guard is needed — single-threaded initialization is safe and simpler.
-
-**Reference:** Phase 6 lifecycle in streams-delivery-phases.md; graceful shutdown (Addition 15) applies to the manager's `stop` path.
+**Reference:** `runtime/new/actor-based-runtime.md`, `pipeline-implementation-v2.md`, and Phase 6 lifecycle in `streams-delivery-phases.md`.
 
 ---
 
@@ -145,7 +122,7 @@ If pipelines are only registered at server startup and never changed afterward, 
 
 ### Duplication today
 
-[`PipelineRuntime.kt`](../pipekt/src/commonMain/kotlin/io/github/fpaschos/pipekt/runtime/PipelineRuntime.kt) has two paired sets of near-identical code:
+[`PipelineRuntime.kt`](../src/commonMain/kotlin/io/github/fpaschos/pipekt/runtime/new/PipelineRuntime.kt) has two paired sets of near-identical code:
 
 **Worker launch duplication.** `launchStepWorker` and `launchFilterWorker` share the same structure: `store.claim(stepName, runId, 10, leaseDuration, workerId)` → `for (item in claimed) executeX(...)` → `delay(workerPollInterval)`. Only the `executeX` call differs.
 
@@ -237,5 +214,5 @@ This TR references:
 ### Recommended updates to existing plans
 
 - **streams-delivery-additions.md:** Add a short note after the Summary Table titled "Production default overrides" with the recommended production values for `watchdogInterval`, `workerPollInterval`, and `leaseDuration`, referencing this document for full ranges.
-- **streams-delivery-phases.md:** Under Phase 6 scope, add one line: "Pipeline registry/manager (`PipelineManager`) is specified in `streams-technical-requirements.md` and implemented in the application/framework layer."
-- **plans/README.md:** Add `streams-technical-requirements.md` to the list of active MVP planning documents, after `streams-delivery-additions.md`.
+- **streams-delivery-phases.md:** Keep Phase 6 wording aligned with the current `PipelineOrchestrator` API in `pipekt.runtime.new`, while leaving framework ownership and wiring concerns in that phase.
+- **README.md:** Keep `streams-technical-requirements.md` in the list of active MVP spec documents, after `streams-delivery-additions.md`.

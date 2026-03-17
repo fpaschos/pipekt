@@ -10,7 +10,7 @@ import kotlin.time.Instant
  * Contract coverage for [WorkItem] as a persistent entity.
  *
  * These tests validate the "WorkItem minimum fields" (and related fields)
- * contract from `plans/streams-contracts-v1.md`: every work item must carry
+ * contract from `specs/streams-contracts-v1.md`: every work item must carry
  * identity, run, step, status, payload and error metadata, lease information,
  * retry timing, and creation / update timestamps, all exposed as immutable
  * value-type fields.

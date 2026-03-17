@@ -26,7 +26,7 @@ import kotlin.uuid.Uuid
  * This class also exposes [getWorkItem] and [markRunFailed] as additional helpers required by tests
  * and operational tooling.
  *
- * See `plans/streams-contracts-v1.md` (Store Contracts) and `plans/streams-delivery-phases.md` (Phase 1C).
+ * See `specs/streams-contracts-v1.md` (Store Contracts) and `specs/streams-delivery-phases.md` (Phase 1C).
  */
 @OptIn(ExperimentalUuidApi::class)
 class InMemoryStore : DurableStore {

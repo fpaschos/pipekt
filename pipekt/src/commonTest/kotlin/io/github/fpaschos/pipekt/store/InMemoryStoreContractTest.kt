@@ -18,7 +18,7 @@ import kotlin.uuid.Uuid
  * Contract tests for [InMemoryStore] covering all [DurableStore] behavioral requirements.
  *
  * Each test targets a single state transition or contract invariant from
- * `plans/streams-contracts-v1.md` (Store Contracts section). Coverage:
+ * `specs/streams-contracts-v1.md` (Store Contracts section). Coverage:
  *
  * - Run lifecycle: getOrCreateRun idempotency, planVersion keying, listActiveRuns filtering
  * - Ingress: appendIngress counts, duplicate suppression by (runId, sourceId)

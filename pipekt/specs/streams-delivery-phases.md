@@ -326,7 +326,7 @@ Integrate the validated `streams` library into the actual service composition mo
 
 ### Scope
 
-- **pipeline registry/manager** (`PipelineManager`): a central component that owns one `PipelineRuntime` per registered `PipelineDefinition`, providing `startPipeline`, `stopPipeline`, `listPipelines`, and `getRuntime` operations. Specified in `streams-technical-requirements.md`; implemented in this layer, not in `pipekt` commonMain.
+- **pipeline orchestration and lifecycle wiring**: applications/frameworks own a `PipelineOrchestrator` instance from `pipekt.runtime.new`, wire it into service lifecycle, and expose service-level start/stop/inspection operations around the library runtime.
 - lifecycle ownership for 3-5 concurrent pipelines per service instance
 - DI wiring
 - tracing/context propagation bridges

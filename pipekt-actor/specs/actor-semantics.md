@@ -1,6 +1,6 @@
 # Actor semantics
 
-This document describes the behavior currently implemented in [`Actor.kt`](Actor.kt), [`ActorContext.kt`](ActorContext.kt), [`ActorRef.kt`](ActorRef.kt), and [`RequestReply.kt`](RequestReply.kt).
+This document describes the behavior currently implemented in [`Actor.kt`](../src/commonMain/kotlin/actor/Actor.kt), [`ActorContext.kt`](../src/commonMain/kotlin/actor/ActorContext.kt), [`ActorRef.kt`](../src/commonMain/kotlin/actor/ActorRef.kt), and [`RequestReply.kt`](../src/commonMain/kotlin/actor/RequestReply.kt).
 
 The source code is the single source of truth. If this file and the code disagree, the code wins.
 
