@@ -58,7 +58,7 @@ suspend fun createPipelineOrchestrator(
     dispatcher: CoroutineDispatcher? = null,
 ): PipelineOrchestrator {
     val ref =
-        spawn<OrchestratorCommand>(
+        spawn(
             name = "pipeline-orchestrator",
             dispatcher = dispatcher,
         ) {
@@ -196,10 +196,22 @@ private class PipelineOrchestratorActor(
         command: OrchestratorCommand,
     ) {
         when (command) {
-            is OrchestratorCommand.StartPipeline -> startPipeline(ctx, command)
-            is OrchestratorCommand.StopPipeline -> stopPipeline(command)
-            is OrchestratorCommand.InspectPipeline -> command.replyTo.tell(activeExecutables[command.executableId]?.snapshot)
-            is OrchestratorCommand.ListActivePipelines -> command.replyTo.tell(activeExecutables.values.map { it.snapshot })
+            is OrchestratorCommand.StartPipeline -> {
+                startPipeline(ctx, command)
+            }
+
+            is OrchestratorCommand.StopPipeline -> {
+                stopPipeline(command)
+            }
+
+            is OrchestratorCommand.InspectPipeline -> {
+                command.replyTo.tell(activeExecutables[command.executableId]?.snapshot)
+            }
+
+            is OrchestratorCommand.ListActivePipelines -> {
+                command.replyTo.tell(activeExecutables.values.map { it.snapshot })
+            }
+
             is OrchestratorCommand.StopAll -> {
                 activeExecutables.values.toList().forEach { active ->
                     active.runtimeRef.shutdown(command.timeout)
@@ -259,7 +271,7 @@ private class PipelineOrchestratorActor(
                 config = command.config,
             )
         val runtimeRef =
-            spawn<RuntimeCommand>(name = "pipeline-runtime-${command.definition.name}") {
+            spawn(name = "pipeline-runtime-${command.definition.name}") {
                 PipelineRuntimeActor(runtime = runtime, config = command.config)
             }
         val snapshot =
@@ -294,14 +306,11 @@ private class PipelineOrchestratorActor(
     ) {
         val currentConfig = leaseReclaimerConfig
         val mergedConfig =
-            if (currentConfig == null) {
-                requestedConfig
-            } else {
-                currentConfig.copy(
-                    watchdogInterval = minOf(currentConfig.watchdogInterval, requestedConfig.watchdogInterval),
-                    workerClaimLimit = maxOf(currentConfig.workerClaimLimit, requestedConfig.workerClaimLimit),
-                )
-            }
+            currentConfig?.copy(
+                watchdogInterval = minOf(currentConfig.watchdogInterval, requestedConfig.watchdogInterval),
+                workerClaimLimit = maxOf(currentConfig.workerClaimLimit, requestedConfig.workerClaimLimit),
+            )
+                ?: requestedConfig
 
         if (leaseReclaimerRef != null && mergedConfig == currentConfig) {
             return
@@ -334,7 +343,7 @@ private class PipelineRuntimeActor(
         runtime.start()
 
         val ingressWorker =
-            spawn<WorkerCommand>(name = "ingress-${runtime.definition.name}") {
+            spawn(name = "ingress-${runtime.definition.name}") {
                 IngressWorkerActor(runtime = runtime, config = config)
             }
         ctx.watch(ingressWorker) { termination -> RuntimeCommand.WorkerTerminated(termination) }
@@ -342,7 +351,7 @@ private class PipelineRuntimeActor(
 
         runtime.stepNames.forEach { stepName ->
             val worker =
-                spawn<WorkerCommand>(name = "step-${runtime.definition.name}-$stepName") {
+                spawn(name = "step-${runtime.definition.name}-$stepName") {
                     StepWorkerActor(
                         runtime = runtime,
                         config = config,

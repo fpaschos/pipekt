@@ -26,6 +26,9 @@ internal class PipelineRuntime(
     private val config: RuntimeConfig,
 ) {
     @Suppress("UNCHECKED_CAST")
+    private val source = definition.source as SourceDef<Any?>
+
+    @Suppress("UNCHECKED_CAST")
     private val compiledOperators: List<CompiledOperator> =
         definition.operators.mapIndexed { index, operator ->
             val nextStepName = definition.operators.getOrNull(index + 1)?.name
@@ -50,8 +53,6 @@ internal class PipelineRuntime(
             }
         }
 
-    @Suppress("UNCHECKED_CAST")
-    private val source = definition.source as SourceDef<Any?>
     private val operatorsByName = compiledOperators.associateBy { it.stepName }
 
     private val sourcePayloadType = compiledOperators.firstOrNull()?.inputType ?: error("Pipeline must define at least one operator.")
