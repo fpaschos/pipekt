@@ -65,35 +65,38 @@ private class DefaultPipelineOrchestrator(
         planVersion: String,
         config: RuntimeConfig,
     ): PipelineExecutable =
-        ref.ask(30.seconds) { replyTo ->
-            OrchestratorCommand.StartPipeline(
-                definition = definition,
-                planVersion = planVersion,
-                config = config,
-                replyTo = replyTo,
-            )
-        }.getOrThrow()
+        ref
+            .ask(30.seconds) { replyTo ->
+                OrchestratorCommand.StartPipeline(
+                    definition = definition,
+                    planVersion = planVersion,
+                    config = config,
+                    replyTo = replyTo,
+                )
+            }.getOrThrow()
 
     override suspend fun stopPipeline(
         executableId: String,
         timeout: Duration?,
     ) {
-        ref.ask(30.seconds) { replyTo ->
-            OrchestratorCommand.StopPipeline(
-                executableId = executableId,
-                timeout = timeout,
-                replyTo = replyTo,
-            )
-        }.getOrThrow()
+        ref
+            .ask(30.seconds) { replyTo ->
+                OrchestratorCommand.StopPipeline(
+                    executableId = executableId,
+                    timeout = timeout,
+                    replyTo = replyTo,
+                )
+            }.getOrThrow()
     }
 
     override suspend fun inspectPipeline(executableId: String): PipelineExecutableSnapshot? =
-        ref.ask(30.seconds) { replyTo ->
-            OrchestratorCommand.InspectPipeline(
-                executableId = executableId,
-                replyTo = replyTo,
-            )
-        }.getOrThrow()
+        ref
+            .ask(30.seconds) { replyTo ->
+                OrchestratorCommand.InspectPipeline(
+                    executableId = executableId,
+                    replyTo = replyTo,
+                )
+            }.getOrThrow()
 
     override suspend fun listActivePipelines(): List<PipelineExecutableSnapshot> =
         ref.ask(30.seconds) { replyTo -> OrchestratorCommand.ListActivePipelines(replyTo) }.getOrThrow()
@@ -124,8 +127,7 @@ private class DefaultPipelineExecutable(
         orchestrator.stopPipeline(executableId, timeout)
     }
 
-    override suspend fun snapshot(): PipelineExecutableSnapshot? =
-        orchestrator.inspectPipeline(executableId)?.also { latestSnapshot = it }
+    override suspend fun snapshot(): PipelineExecutableSnapshot? = orchestrator.inspectPipeline(executableId)?.also { latestSnapshot = it }
 }
 
 private data class ActivePipeline(
@@ -222,18 +224,19 @@ private class PipelineOrchestratorActor(
         ctx: ActorContext<OrchestratorCommand>,
         command: OrchestratorCommand.StartPipeline,
     ) {
-        activeExecutables.values.firstOrNull {
-            it.snapshot.pipelineName == command.definition.name &&
-                it.snapshot.planVersion == command.planVersion
-        }?.let {
-            command.replyTo.fail(
-                PipelineAlreadyActiveException(
-                    pipelineName = command.definition.name,
-                    planVersion = command.planVersion,
-                ),
-            )
-            return
-        }
+        activeExecutables.values
+            .firstOrNull {
+                it.snapshot.pipelineName == command.definition.name &&
+                    it.snapshot.planVersion == command.planVersion
+            }?.let {
+                command.replyTo.fail(
+                    PipelineAlreadyActiveException(
+                        pipelineName = command.definition.name,
+                        planVersion = command.planVersion,
+                    ),
+                )
+                return
+            }
 
         ensureLeaseReclaimer(ctx, command.config)
 

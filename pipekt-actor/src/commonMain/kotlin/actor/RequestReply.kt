@@ -8,9 +8,10 @@ import kotlinx.coroutines.CompletableDeferred
 interface ReplyRef<in Reply> {
     fun tell(reply: Reply): Result<Unit>
 
-    fun fail(cause: Throwable): Result<Unit> = Result.failure(
-        UnsupportedOperationException("This reply ref does not support failure delivery."),
-    )
+    fun fail(cause: Throwable): Result<Unit> =
+        Result.failure(
+            UnsupportedOperationException("This reply ref does not support failure delivery."),
+        )
 }
 
 internal interface AskReplyHandle {

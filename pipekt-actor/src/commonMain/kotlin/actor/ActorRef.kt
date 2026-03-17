@@ -70,7 +70,7 @@ interface ActorRef<in Command : Any> : ReplyRef<Command> {
 
     val label: String
 
-    override fun tell(command: Command): Result<Unit>
+    override fun tell(reply: Command): Result<Unit>
 
     suspend fun shutdown(timeout: Duration? = null)
 }

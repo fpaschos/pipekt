@@ -252,7 +252,9 @@ class PipelineDslRuntimeTest :
             val definition =
                 pipeline<Msg>("watchdog-pipeline", maxInFlight = 10) {
                     source("src", adapter)
-                    step<Msg, Msg>("resume-step") { msg -> Msg(msg.value.uppercase()) }
+                    step<Msg, Msg>("resume-step") { msg ->
+                        Msg(msg.value.uppercase())
+                    }
                 }.shouldBeRight()
 
             val run = store.findOrCreateRun("watchdog-pipeline", "v1")

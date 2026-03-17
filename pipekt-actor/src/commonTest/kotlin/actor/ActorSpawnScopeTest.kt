@@ -2,9 +2,9 @@ package io.github.fpaschos.pipekt.actor
 
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.result.shouldBeSuccess
-import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
+import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi

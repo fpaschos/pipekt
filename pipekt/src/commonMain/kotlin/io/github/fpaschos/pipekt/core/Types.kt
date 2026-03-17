@@ -62,7 +62,7 @@ typealias StepFn<I, O> = suspend context(Raise<ItemFailure>, StepCtx)
  * The engine uses [id] as the stable [StepCtx.itemKey] for idempotent ingestion and checkpointing.
  *
  * @param id Stable identifier from the source (e.g. message id); must be unique per source.
- * @param payload The typed payload for this record.
+ * @param payload The typed payload for this record.1
  */
 data class SourceRecord<T>(
     val id: String,

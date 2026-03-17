@@ -175,8 +175,7 @@ class InMemoryStore : DurableStore {
                             it.currentStep == step &&
                             it.status == WorkItemStatus.PENDING &&
                             (it.retryAt == null || it.retryAt <= now)
-                    }
-                    .take(limit)
+                    }.take(limit)
             val leaseExpiry = now + leaseDuration
             candidates.map { item ->
                 item

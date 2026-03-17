@@ -22,8 +22,6 @@ kotlin {
             languageSettings.progressiveMode = true
         }
         commonMain.dependencies {
-            implementation(project(":pipekt-actor"))
-
             implementation(libs.bundles.arrow)
             implementation(libs.bundles.kotlinx.serialization)
             implementation(libs.kotlinx.coroutines.core)

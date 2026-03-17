@@ -97,14 +97,15 @@ class ActorMailboxTest :
                 val undelivered = mutableListOf<String>()
                 val ref = spawn("recording-actor") { RecordingActor(undelivered) }
 
-                ref.tell(
-                    TestCommand.Fail(
-                        replyTo =
-                            object : ReplyRef<String> {
-                                override fun tell(reply: String): Result<Unit> = Result.success(Unit)
-                            },
-                    ),
-                ).shouldBeSuccess(Unit)
+                ref
+                    .tell(
+                        TestCommand.Fail(
+                            replyTo =
+                                object : ReplyRef<String> {
+                                    override fun tell(reply: String): Result<Unit> = Result.success(Unit)
+                                },
+                        ),
+                    ).shouldBeSuccess(Unit)
                 ref.tell(TestCommand.Record("dropped")).shouldBeSuccess(Unit)
                 advanceUntilIdle()
 
@@ -132,7 +133,11 @@ class ActorMailboxTest :
                 advanceTimeBy(50.milliseconds)
                 runCurrent()
 
-                pendingAsk.await().shouldBeFailure().shouldBeInstanceOf<ActorUnavailable>().reason shouldBe
+                pendingAsk
+                    .await()
+                    .shouldBeFailure()
+                    .shouldBeInstanceOf<ActorUnavailable>()
+                    .reason shouldBe
                     ActorUnavailableReason.NOT_DELIVERED
                 drainGate.complete(Unit)
                 firstShutdown.await()

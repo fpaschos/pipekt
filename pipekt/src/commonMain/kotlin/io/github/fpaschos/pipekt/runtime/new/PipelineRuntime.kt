@@ -3,6 +3,7 @@ package io.github.fpaschos.pipekt.runtime.new
 import arrow.core.Either
 import arrow.core.raise.either
 import io.github.fpaschos.pipekt.core.FilterDef
+import io.github.fpaschos.pipekt.core.IngressRecord
 import io.github.fpaschos.pipekt.core.ItemFailure
 import io.github.fpaschos.pipekt.core.PayloadSerializer
 import io.github.fpaschos.pipekt.core.PipelineDefinition
@@ -24,27 +25,35 @@ internal class PipelineRuntime(
     private val serializer: PayloadSerializer,
     private val config: RuntimeConfig,
 ) {
+    @Suppress("UNCHECKED_CAST")
     private val compiledOperators: List<CompiledOperator> =
         definition.operators.mapIndexed { index, operator ->
             val nextStepName = definition.operators.getOrNull(index + 1)?.name
             when (operator) {
-                is StepDef<*, *> ->
+                is StepDef<*, *> -> {
                     CompiledOperator.Step(
                         def = operator as StepDef<Any?, Any?>,
                         nextStepName = nextStepName,
                     )
+                }
 
-                is FilterDef<*> ->
+                is FilterDef<*> -> {
                     CompiledOperator.Filter(
                         def = operator as FilterDef<Any?>,
                         nextStepName = nextStepName,
                     )
+                }
 
-                is SourceDef<*> -> error("Pipeline operators must not contain sources.")
+                is SourceDef<*> -> {
+                    error("Pipeline operators must not contain sources.")
+                }
             }
         }
-    private val operatorsByName = compiledOperators.associateBy { it.stepName }
+
+    @Suppress("UNCHECKED_CAST")
     private val source = definition.source as SourceDef<Any?>
+    private val operatorsByName = compiledOperators.associateBy { it.stepName }
+
     private val sourcePayloadType = compiledOperators.firstOrNull()?.inputType ?: error("Pipeline must define at least one operator.")
 
     private var startedRun: RunRecord? = null
@@ -77,7 +86,7 @@ internal class PipelineRuntime(
         try {
             val records =
                 polled.map { record ->
-                    io.github.fpaschos.pipekt.core.IngressRecord(
+                    IngressRecord(
                         sourceId = record.id,
                         payload = serializer.serialize(record.payload, sourcePayloadType),
                     )
@@ -143,7 +152,9 @@ internal class PipelineRuntime(
                 store.checkpointSuccess(item, outputJson, operator.nextStepName)
             }
 
-            is Either.Left -> checkpointFailure(item, result.value, operator.def.retryPolicy.maxAttempts, operator.def.retryPolicy.backoffMs)
+            is Either.Left -> {
+                checkpointFailure(item, result.value, operator.def.retryPolicy.maxAttempts, operator.def.retryPolicy.backoffMs)
+            }
         }
     }
 
