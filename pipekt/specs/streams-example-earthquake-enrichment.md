@@ -1,5 +1,11 @@
 # Streams Example Plan: Earthquake Enrichment Stress Case
 
+**Status:** Illustrative example document.
+
+**Purpose:** Show one concrete INFINITE pipeline example using the active contracts and runtime model.
+
+**Precedence:** This document is intentionally lower precedence than [streams-contracts-v1.md](./streams-contracts-v1.md), [current-implementation.md](./current-implementation.md), and [streams-phase-2-fix-plan.md](./streams-phase-2-fix-plan.md). If it conflicts with those documents, they win.
+
 ## Summary
 
 This document defines a concrete example pipeline for `pipekt` v1 (`INFINITE` mode only) that you can implement and stress-test before AMQP/Kafka adapters.
