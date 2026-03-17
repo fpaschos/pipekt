@@ -1,5 +1,11 @@
 # Streams Delivery Phases
 
+**Status:** Delivery sequencing document.
+
+**Purpose:** Describe implementation order, entry/exit criteria, and phase-level milestones.
+
+**Precedence:** This document governs sequencing and milestone intent. For stable contracts see [streams-contracts-v1.md](./streams-contracts-v1.md). For what currently exists in code see [current-implementation.md](./current-implementation.md). For unresolved correctness gaps see [streams-phase-2-fix-plan.md](./streams-phase-2-fix-plan.md).
+
 ## Implementation Status
 
 ### Phase 1A — DSL + Validation (complete)
@@ -29,7 +35,7 @@
 
 Implemented:
 - [x] ingestion loop separated from per-step worker loops
-- [x] ingestion uses `countNonTerminal` to cap intake by `maxInFlight`
+- [x] ingestion uses `countNonTerminal` to cap intake by `maxInFlight` as a soft throttle
 - [x] worker loops claim by step and checkpoint atomically through the store SPI
 - [x] retry scheduling uses `retryAt` based on `RetryPolicy`
 - [x] store-scoped lease reclaimer / watchdog loop exists
@@ -120,6 +126,7 @@ Add real execution discipline to the in-memory engine, including the separation 
 - separate ingestion loop from per-step worker loops
 - ingestion loop pattern: `countNonTerminal check` → `sourceAdapter.poll(maxItems)` → `bulk appendIngress` → `sourceAdapter.ack()`
 - backpressure: ingestion loop pauses when `store.countNonTerminal(runId) >= pipeline.maxInFlight`; resumes when it drops below the threshold
+- current implementation note: this is currently a soft throttle, not an atomic store-enforced hard cap
 - per-step worker loops: `claim(step, runId, limit, leaseMs, workerId)` → execute `StepFn` → atomic checkpoint
 - watchdog loop: periodic `reclaimExpiredLeases` call
 - per-step concurrency limits
@@ -161,7 +168,7 @@ Replace the fake store with a durable implementation that becomes the source of 
 
 - Postgres schema for runs and work items (no `attempts` table in MVP)
 - atomic checkpoint queries: each `checkpointSuccess`, `checkpointFiltered`, `checkpointFailure` is a single transaction
-- `payload_json` nulled at terminal checkpoint inside the checkpoint transaction
+- `payload_json` nulled at terminal checkpoint inside the checkpoint transaction to avoid retaining large terminal payloads in durable storage
 - `claim` using `SELECT ... FOR UPDATE SKIP LOCKED` within a single transaction
 - `appendIngress` bulk insert with `ON CONFLICT (run_id, source_id) DO NOTHING`
 - `reclaimExpiredLeases`: atomic `UPDATE work_items SET status = 'PENDING' WHERE status = 'IN_PROGRESS' AND lease_expiry_ms < $now`
@@ -225,7 +232,7 @@ No `attempts` table in MVP. No `finalizer_locks` table. Background archival/dele
 The Postgres store implementation uses [sqlx4k](https://github.com/smyrgeorge/sqlx4k) as the database driver. The following decisions apply:
 
 - **Migrations**: use `db.migrate(path, table)` built into sqlx4k — no Flyway dependency. Ship the schema as a SQL migration file; users include it in their existing migration path.
-- **Atomic checkpoints**: each `checkpointSuccess`, `checkpointFiltered`, `checkpointFailure` runs inside `db.transaction {}`. The transaction increments `attempt_count`, updates `status`, and nulls `payload_json` for terminal items — all in one `UPDATE`.
+- **Atomic checkpoints**: each `checkpointSuccess`, `checkpointFiltered`, `checkpointFailure` runs inside `db.transaction {}`. The transaction increments `attempt_count`, updates `status`, and nulls `payload_json` for terminal items — all in one `UPDATE`. This keeps terminal rows compact even when in-flight payload JSON is large.
 - **`claim`**: implemented as a raw `Statement` with `SELECT ... FOR UPDATE SKIP LOCKED` executed inside a `db.transaction {}`. The `UPDATE` to `IN_PROGRESS` follows in the same transaction.
 - **`appendIngress`**: hand-written multi-row `VALUES` string (dynamic row count); `ON CONFLICT (run_id, source_id) DO NOTHING`. sqlx4k codegen batch insert is not used here.
 - **Codegen**: use sqlx4k `@Repository` codegen only for simple reads (`getRun`, `listActiveRuns`). All checkpoint, claim, and reclaim queries are hand-written `Statement` calls.

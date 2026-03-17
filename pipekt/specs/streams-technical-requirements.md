@@ -1,5 +1,11 @@
 # Streams Technical Requirements
 
+**Status:** Active technical guidance document.
+
+**Purpose:** Capture operational guidance, tuning defaults, infrastructure behavior, and implementation recommendations that complement the stable contracts.
+
+**Precedence:** This document does not override [streams-contracts-v1.md](./streams-contracts-v1.md). It should be read after contracts and current implementation status, and alongside [streams-phase-2-fix-plan.md](./streams-phase-2-fix-plan.md) for unresolved gaps.
+
 ## Purpose and scope
 
 This document is the **technical requirements reference** for orthogonal runtime concerns that apply before and during Phase 2 (Runtime and Backpressure): default values and recommended ranges, error handling strategy (internal vs external), Arrow usage and ergonomics, database performance options, pipeline registry/management, and runtime code organization.
@@ -29,6 +35,7 @@ All runtime and definition knobs with current code defaults, test-friendly value
 - Production wiring should override `watchdogInterval` (e.g. 5 s) and optionally `workerPollInterval`. The code defaults of 10 ms / 50 ms are intentionally test-friendly.
 - Total `maxInFlight` across all pipelines on a server should be evaluated against DB capacity (connection pool, `countNonTerminal` query cost). For 3–5 concurrent pipelines, keep the total well under 500k rows non-terminal at any time.
 - `leaseDuration` should exceed the expected worst-case step execution time; the watchdog is a recovery mechanism, not a normal execution path.
+- current implementation note: `maxInFlight` currently behaves as a soft runtime throttle rather than a store-enforced hard cap; see [streams-phase-2-fix-plan.md](./streams-phase-2-fix-plan.md).
 
 **References:** `PipelineRuntime` constructor, `PipelineDefinition.maxInFlight`, `PipelineDefinition.retentionDays`, and the Phase 2 backpressure notes in [streams-phase-2-fix-plan.md](streams-phase-2-fix-plan.md).
 
@@ -65,7 +72,27 @@ Step-level outcomes are already modeled via `ItemFailure` and Arrow `Raise<ItemF
 
 ### Bounded retries and poison
 
-`RetryPolicy.maxAttempts` must be finite (always). After attempts are exhausted or a non-retryable failure is raised, call `checkpointFailure(item, message, retryAt = null)` so the item reaches terminal `FAILED`. The engine must never retry a terminal-failed item; the "retry forever" failure mode is prevented by this rule and by the terminal checkpoint (Addition 2).
+`RetryPolicy.maxAttempts` must be finite (always). After attempts are exhausted or a non-retryable failure is raised, call `checkpointFailure(item, message, retryAt = null)` so the item reaches terminal `FAILED`. The engine must never retry a terminal-failed item; the "retry forever" failure mode is prevented by this rule and by the terminal checkpoint.
+
+---
+
+## Payload retention and storage efficiency
+
+`payloadJson` is the runtime payload for the **current** step only. It is not an immutable history record.
+
+Rules:
+
+- each non-terminal successful checkpoint overwrites `payloadJson` with the next-step payload
+- terminal checkpoints (`COMPLETED`, `FILTERED`, `FAILED`) must null `payloadJson`
+- terminal payload nulling is a required storage/performance behavior, not optional cleanup
+
+Why:
+
+- step payloads may grow substantially after enrichment
+- retaining them on terminal items would create avoidable durable row bloat
+- nulling terminal payloads keeps storage growth focused on active work rather than historical payload bodies
+
+This optimization must not break restart correctness; terminal items no longer need payload material to continue execution.
 
 ---
 
@@ -122,7 +149,7 @@ Pipeline health and in-flight counts can be derived via `PipelineExecutableSnaps
 
 ### Duplication today
 
-[`PipelineRuntime.kt`](../src/commonMain/kotlin/io/github/fpaschos/pipekt/runtime/new/PipelineRuntime.kt) has two paired sets of near-identical code:
+[`PipelineRuntime.kt`](../src/commonMain/kotlin/io/github/fpaschos/pipekt/runtime/new/PipelineRuntime.kt) still has two paired sets of near-identical code:
 
 **Worker launch duplication.** `launchStepWorker` and `launchFilterWorker` share the same structure: `store.claim(stepName, runId, 10, leaseDuration, workerId)` → `for (item in claimed) executeX(...)` → `delay(workerPollInterval)`. Only the `executeX` call differs.
 

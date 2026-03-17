@@ -1,5 +1,11 @@
 # Streams Phase 2 Fix Plan
 
+**Status:** Open fix-plan document.
+
+**Purpose:** Track unresolved correctness and contract-alignment gaps that must be closed before Phase 3.
+
+**Precedence:** This document does not replace [streams-contracts-v1.md](./streams-contracts-v1.md). It records where the current implementation still falls short of those contracts or where the contract still needs to be frozen explicitly.
+
 ## Purpose
 
 This document turns the current implementation review into a concrete **Phase 2 remediation plan** for the `pipekt` runtime. It focuses on gaps between the active plans and the implementation that exists now, and it defines the work required before Phase 3 (durable Postgres store) should proceed.

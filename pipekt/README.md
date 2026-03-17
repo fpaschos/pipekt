@@ -4,14 +4,30 @@
 
 These documents are the active source of truth for the current `pipekt` core module and its stream-processing runtime:
 
-- [streams-core-architecture.md](./specs/streams-core-architecture.md)
 - [streams-contracts-v1.md](./specs/streams-contracts-v1.md)
+- [current-implementation.md](./specs/current-implementation.md)
+- [streams-core-architecture.md](./specs/streams-core-architecture.md)
 - [streams-delivery-phases.md](./specs/streams-delivery-phases.md)
 - [streams-technical-requirements.md](./specs/streams-technical-requirements.md)
 - [streams-phase-2-fix-plan.md](./specs/streams-phase-2-fix-plan.md)
 - [streams-example-earthquake-enrichment.md](./specs/streams-example-earthquake-enrichment.md)
 
-Read them in that order. `streams-technical-requirements.md` covers orthogonal runtime concerns (default values, error handling, DB performance, pipeline registry, and code organization); read it before implementing Phase 2 or application wiring. `streams-phase-2-fix-plan.md` is the concrete remediation checklist for the current runtime/store drift, now including the remaining `runtime.new` findings and the already-addressed v2 architecture reference; read it before declaring Phase 2 complete or starting Phase 3.
+Read them in that order.
+
+Precedence:
+
+1. [streams-contracts-v1.md](./specs/streams-contracts-v1.md) wins for stable public/runtime-store contracts.
+2. [current-implementation.md](./specs/current-implementation.md) wins for what exists in code today.
+3. [streams-core-architecture.md](./specs/streams-core-architecture.md) wins for intended package boundaries and ownership model.
+4. [streams-delivery-phases.md](./specs/streams-delivery-phases.md) wins for sequencing and milestone intent.
+5. [streams-technical-requirements.md](./specs/streams-technical-requirements.md) wins for operational guidance and tuning.
+6. [streams-phase-2-fix-plan.md](./specs/streams-phase-2-fix-plan.md) wins for unresolved correctness gaps that must be closed before Phase 3.
+
+Reading notes:
+
+- `streams-technical-requirements.md` covers orthogonal runtime concerns (default values, error handling, DB performance, pipeline registry, and code organization).
+- `streams-phase-2-fix-plan.md` is the concrete remediation checklist for the current runtime/store drift, now including the remaining `runtime.new` findings and the already-addressed v2 architecture reference.
+- `streams-example-earthquake-enrichment.md` is an illustrative example, not a higher-precedence contract document.
 
 ## Runtime-Local Notes
 
@@ -21,7 +37,7 @@ Read them in that order. `streams-technical-requirements.md` covers orthogonal r
 
 ### Top level
 
-Active MVP planning documents only.
+Active MVP specifications and implementation guidance only.
 
 ### `future/`
 

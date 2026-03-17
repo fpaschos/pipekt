@@ -1,5 +1,11 @@
 # Streams Core Architecture
 
+**Status:** Target architecture document.
+
+**Purpose:** Define the intended package boundaries, ownership model, and architectural constraints for the active `pipekt` runtime.
+
+**Precedence:** This document guides architectural intent. If it conflicts with [streams-contracts-v1.md](./streams-contracts-v1.md) on stable contract behavior, the contracts document wins. If it conflicts with implemented code shape, see [current-implementation.md](./current-implementation.md) and [streams-phase-2-fix-plan.md](./streams-phase-2-fix-plan.md).
+
 ## Summary
 
 This document defines the target architecture for the new parallel `streams` library inside `pipekt`.
@@ -72,7 +78,7 @@ Must not depend on:
 - Koin
 - kt framework runtime types
 
-### `io.github.fpaschos.pipekt.runtime`
+### `io.github.fpaschos.pipekt.runtime.new`
 
 Responsibilities:
 
@@ -159,7 +165,7 @@ V1 uses a small compile boundary:
 
 2. Internal executable plan (not a public API in v1)
 - runtime may derive a runtime-ready form from a validated definition (resolved step ordering, execution metadata)
-- this plan stays internal to `pipekt.runtime`; there is no public `ExecutablePipeline` type in v1
+- this plan stays internal to `pipekt.runtime.new`; there is no public `ExecutablePipeline` type in v1
 
 This compile step is intentionally simple:
 
@@ -184,7 +190,7 @@ The purpose is only to avoid mixing DSL concerns with runtime orchestration.
 6. Per-step worker loops claim runnable items (`claim` — atomic, `FOR UPDATE SKIP LOCKED`).
 7. Step functions execute with engine-managed retry and timeout policy.
 8. Store checkpoints success or failure atomically (attempt counter + item state + payload in one transaction).
-9. On terminal checkpoint (`COMPLETED`, `FILTERED`, `FAILED`), `payload_json` is nulled immediately.
+9. On terminal checkpoint (`COMPLETED`, `FILTERED`, `FAILED`), `payload_json` is nulled immediately to bound retained payload size and reduce long-lived storage bloat.
 10. The run never reaches a terminal state. Items are individually terminal; the run is a long-lived grouping key.
 11. Background archival job periodically deletes or archives terminal `work_items` rows older than N days.
 
@@ -228,7 +234,7 @@ The following separations are mandatory:
 
 - The engine must be restart-safe from store state alone.
 - In-memory queues are optimization only; they are not the source of truth.
-- `payload_json` is nullable; it must be nulled at the terminal checkpoint for `COMPLETED`, `FILTERED`, and `FAILED` items — this is an engine invariant, not optional.
+- `payload_json` is nullable; it must be nulled at the terminal checkpoint for `COMPLETED`, `FILTERED`, and `FAILED` items — this is an engine invariant, not optional, and it is required to keep durable storage growth bounded when payloads are large.
 - `resumeRuns` must call `reclaimExpiredLeases` before re-executing any active run.
 - Adapter code may be JVM-specific; core contracts must remain free of JVM-only transport concerns.
 - The run is long-lived and never transitions to a terminal state; items are individually terminal. Run-level `status` is a coarse health indicator (`ACTIVE` for the normal lifetime state, `FAILED` for unrecoverable conditions). `INFINITE` runs do not have a `COMPLETED` status. For the full status set and `(pipeline, planVersion)` lookup semantics, see `streams-contracts-v1.md`.
@@ -262,8 +268,8 @@ The following are explicitly out of scope for the first pass:
 
 - `pipekt.core` is implemented first.
 - `pipekt.core` produces a validated definition, not a physical execution tree.
-- `pipekt.runtime` must consume generic source/store contracts rather than RabbitMQ handlers.
-- `pipekt.runtime` may compile definitions into an internal executable plan, but that plan stays a runtime implementation detail in v1.
-- `pipekt.runtime` runs three independent coroutine loops: ingestion, per-step workers, and watchdog.
+- `pipekt.runtime.new` must consume generic source/store contracts rather than RabbitMQ handlers.
+- `pipekt.runtime.new` may compile definitions into an internal executable plan, but that plan stays a runtime implementation detail in v1.
+- `pipekt.runtime.new` runs three independent coroutine loops: ingestion, per-step workers, and watchdog.
 - `pipekt.adapters.amqp` adapts RabbitMQ into ingress records and ack behavior only.
 - kt framework gets a separate integration document and package later, after reference examples prove the API shape.

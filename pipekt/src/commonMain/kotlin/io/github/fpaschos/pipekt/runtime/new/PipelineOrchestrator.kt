@@ -21,6 +21,16 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.ZERO
 import kotlin.time.Duration.Companion.seconds
 
+/*
+ * Runtime ownership summary:
+ * - PipelineOrchestratorActor owns the active executable registry and store-scoped coordination.
+ * - PipelineRuntimeActor owns one started pipeline runtime instance.
+ * - IngressWorkerActor and StepWorkerActor own polling/execution loops for that runtime.
+ * - LeaseReclaimerActor owns store-scoped expired-lease reclaim.
+ *
+ * Registry and lifecycle mutation are actor-owned. This subsystem should remain actor-first
+ * rather than reintroducing shared mutable coordination.
+ */
 interface PipelineOrchestrator {
     suspend fun startPipeline(
         definition: PipelineDefinition,

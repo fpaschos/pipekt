@@ -1,5 +1,11 @@
 # Streams Contracts V1
 
+**Status:** Stable contract document.
+
+**Purpose:** Freeze the accepted v1 contracts for public engine behavior, runtime/store behavior, and persistent entities.
+
+**Precedence:** If another active document conflicts with this one about the intended v1 contract, this document wins. For what is implemented today versus what is still open, see [current-implementation.md](./current-implementation.md).
+
 ## Summary
 
 This document freezes the v1 contract set for the new `streams` library. These contracts are intentionally minimal and are specific enough to support an in-memory implementation first, followed by a durable Postgres-backed runtime.
@@ -104,6 +110,7 @@ Required responsibilities:
 - resume incomplete runs on restart — must call `reclaimExpiredLeases` before re-executing
 - bulk-ingest records from a source adapter (ingestion is separate from execution)
 - apply backpressure: pause the ingestion loop when `countNonTerminal(runId) >= maxInFlight`; resume when it drops below the threshold
+- in the current implementation this backpressure is a best-effort throttle rather than an atomic store-enforced hard cap; see [streams-phase-2-fix-plan.md](./streams-phase-2-fix-plan.md) for the remaining contract gap
 - run per-step worker loops that claim and execute items independently
 - execute steps with retry policy
 - run a watchdog loop that periodically calls `reclaimExpiredLeases`
@@ -180,6 +187,7 @@ Contract rules:
 
 - store operations are authoritative for progress
 - each checkpoint operation is atomic: it increments `attempt_count`, sets `last_error_json` if applicable, updates `current_step` and `status`, and nulls `payload_json` for terminal items — all in one transaction
+- nulling `payload_json` at terminal checkpoint is required not only for correctness but also to bound retained payload size and avoid long-lived storage growth from completed items carrying large JSON payloads
 - state transitions must be monotonic and reject invalid step rewinds
 - `appendIngress` uses `ON CONFLICT (run_id, source_id) DO NOTHING` for idempotent ingress
 - `claim` uses `SELECT ... FOR UPDATE SKIP LOCKED` within a single transaction
@@ -211,7 +219,7 @@ For `INFINITE` pipelines, runs do not have a `COMPLETED` status. A run typically
 - item id, run id, source id (for deduplication)
 - current step name
 - status: `PENDING`, `IN_PROGRESS`, `COMPLETED`, `FILTERED`, `FAILED`
-- `payloadJson: String?` — nullable; holds the serialized current-step payload; **nulled at terminal checkpoint**
+- `payloadJson: String?` — nullable; holds the serialized current-step payload; **nulled at terminal checkpoint** to avoid retaining large terminal payloads indefinitely
 - `lastErrorJson: String?` — set on `FAILED`, null otherwise
 - `attemptCount: Int` — incremented on every checkpoint call
 - `leaseOwner: String?` — worker id holding the current lease
