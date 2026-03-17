@@ -15,7 +15,6 @@ This is a technical planning document, not a backlog dump. Each item includes:
 This document supplements:
 
 - [streams-delivery-phases.md](streams-delivery-phases.md)
-- [streams-delivery-additions.md](streams-delivery-additions.md)
 - [streams-contracts-v1.md](streams-contracts-v1.md)
 - [streams-technical-requirements.md](streams-technical-requirements.md)
 - [../src/commonMain/kotlin/io/github/fpaschos/pipekt/runtime/new/actor-based-runtime.md](../src/commonMain/kotlin/io/github/fpaschos/pipekt/runtime/new/actor-based-runtime.md)

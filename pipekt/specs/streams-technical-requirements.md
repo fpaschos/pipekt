@@ -6,7 +6,7 @@ This document is the **technical requirements reference** for orthogonal runtime
 
 **Readers:** Implementers and reviewers working on `pipekt` runtime and application wiring.
 
-**Relationship to phases:** Many items here are implementable before Phase 2. Phase 2 remains "Runtime and Backpressure" as defined in [streams-delivery-phases.md](streams-delivery-phases.md). This TR supplements [streams-delivery-phases.md](streams-delivery-phases.md), [streams-delivery-additions.md](streams-delivery-additions.md), and [streams-contracts-v1.md](streams-contracts-v1.md), and recommends small amendments to those documents where noted.
+**Relationship to phases:** Many items here are implementable before Phase 2. Phase 2 remains "Runtime and Backpressure" as defined in [streams-delivery-phases.md](streams-delivery-phases.md). This TR supplements [streams-delivery-phases.md](streams-delivery-phases.md), [streams-contracts-v1.md](streams-contracts-v1.md), and [streams-phase-2-fix-plan.md](streams-phase-2-fix-plan.md), and recommends small amendments to those documents where noted.
 
 ---
 
@@ -30,7 +30,7 @@ All runtime and definition knobs with current code defaults, test-friendly value
 - Total `maxInFlight` across all pipelines on a server should be evaluated against DB capacity (connection pool, `countNonTerminal` query cost). For 3–5 concurrent pipelines, keep the total well under 500k rows non-terminal at any time.
 - `leaseDuration` should exceed the expected worst-case step execution time; the watchdog is a recovery mechanism, not a normal execution path.
 
-**References:** `PipelineRuntime` constructor, `PipelineDefinition.maxInFlight`, `PipelineDefinition.retentionDays`, Addition 12 in streams-delivery-additions.md.
+**References:** `PipelineRuntime` constructor, `PipelineDefinition.maxInFlight`, `PipelineDefinition.retentionDays`, and the Phase 2 backpressure notes in [streams-phase-2-fix-plan.md](streams-phase-2-fix-plan.md).
 
 ---
 
@@ -208,11 +208,10 @@ Keep `ExecutableOp`, `StepExecutable`, `FilterExecutable`, and `runStepFn` **pri
 
 This TR references:
 - [streams-delivery-phases.md](streams-delivery-phases.md): Phase 1/2 scope, Phase 6 lifecycle.
-- [streams-delivery-additions.md](streams-delivery-additions.md): Additions 2 (retry backoff), 3 (reclaim), 7 (ingestion/execution separation), 12 (maxInFlight backpressure), 15 (graceful shutdown).
+- [streams-phase-2-fix-plan.md](streams-phase-2-fix-plan.md): remaining runtime correctness fixes and contract gaps before Phase 3.
 - [streams-contracts-v1.md](streams-contracts-v1.md): StepFn contract, StepCtx fields, runtime failures not via `Raise<ItemFailure>`.
 
 ### Recommended updates to existing plans
 
-- **streams-delivery-additions.md:** Add a short note after the Summary Table titled "Production default overrides" with the recommended production values for `watchdogInterval`, `workerPollInterval`, and `leaseDuration`, referencing this document for full ranges.
 - **streams-delivery-phases.md:** Keep Phase 6 wording aligned with the current `PipelineOrchestrator` API in `pipekt.runtime.new`, while leaving framework ownership and wiring concerns in that phase.
-- **README.md:** Keep `streams-technical-requirements.md` in the list of active MVP spec documents, after `streams-delivery-additions.md`.
+- **README.md:** Keep `streams-technical-requirements.md` in the list of active MVP spec documents before `streams-phase-2-fix-plan.md`.
