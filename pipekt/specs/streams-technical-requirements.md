@@ -114,7 +114,7 @@ Pipeline health and in-flight counts can be derived via `PipelineExecutableSnaps
 
 **Concurrency.** The current implementation uses an actor-backed orchestrator. Registry mutation and runtime ownership are serialized through actor messages, which removes the old shared mutable `PipelineRuntime` ownership problem.
 
-**Reference:** `runtime/new/actor-based-runtime.md`, `pipeline-implementation-v2.md`, and Phase 6 lifecycle in `streams-delivery-phases.md`.
+**Reference:** `runtime/new/actor-based-runtime.md`, `streams-phase-2-fix-plan.md`, and Phase 6 lifecycle in `streams-delivery-phases.md`.
 
 ---
 

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document turns the current implementation review into a concrete **Phase 2 remediation plan** for the new `streams` runtime. It focuses on gaps between the active plans and the implementation that exists now, and it defines the work required before Phase 3 (durable Postgres store) should proceed.
+This document turns the current implementation review into a concrete **Phase 2 remediation plan** for the `pipekt` runtime. It focuses on gaps between the active plans and the implementation that exists now, and it defines the work required before Phase 3 (durable Postgres store) should proceed.
 
 This is a technical planning document, not a backlog dump. Each item includes:
 
@@ -10,6 +10,7 @@ This is a technical planning document, not a backlog dump. Each item includes:
 - the required implementation change
 - required tests
 - estimated complexity
+- a priority score
 
 This document supplements:
 
@@ -17,6 +18,22 @@ This document supplements:
 - [streams-delivery-additions.md](streams-delivery-additions.md)
 - [streams-contracts-v1.md](streams-contracts-v1.md)
 - [streams-technical-requirements.md](streams-technical-requirements.md)
+- [../src/commonMain/kotlin/io/github/fpaschos/pipekt/runtime/new/actor-based-runtime.md](../src/commonMain/kotlin/io/github/fpaschos/pipekt/runtime/new/actor-based-runtime.md)
+
+---
+
+## Already Addressed Reference
+
+The earlier `pipeline-implementation-v2.md` review is now folded into this document. The following v2 architecture items are already implemented in `runtime.new` and should be treated as completed reference, not open work:
+
+1. `PipelineOrchestrator` exists inside the library and owns active runtime registration.
+2. `PipelineExecutable` exists as the user-facing capability returned from `startPipeline(...)`.
+3. Orchestrator and runtime ownership are actor-based rather than shared mutable state.
+4. Lease reclaim is store-scoped through a single `LeaseReclaimerActor`, not one watchdog per runtime.
+5. The receiver-based `PipelineDefinition.start(planVersion, config)` API exists.
+6. Worker execution is split behind actors owned by `PipelineRuntimeActor`.
+7. `planVersion` remains separate from `RuntimeConfig`.
+8. The runtime remains framework-agnostic; framework wiring is an integration concern.
 
 ---
 
@@ -29,6 +46,7 @@ The fixes in this document are all **Phase 2** concerns:
 - restart/recovery behavior
 - store contract conformance needed by the runtime
 - missing tests required to freeze the behavior before Postgres work
+- documentation alignment needed to prevent Phase 3 from hardening the wrong contracts
 
 This document does **not** add new v1 features. It only closes gaps against the already accepted MVP plans.
 
@@ -36,19 +54,29 @@ This document does **not** add new v1 features. It only closes gaps against the 
 
 ## Summary Table
 
-| Fix | Problem area | Required before Phase 3 | Estimated complexity |
-| --- | --- | --- | --- |
-| F1 | Missing `lastErrorJson` contract | Yes | Small |
-| F2 | Incorrect `attemptCount` semantics across steps | Yes | Medium |
-| F3 | Runtime dies on store/infra failure | Yes | Medium |
-| F4 | Startup does not reclaim expired leases before workers run | Yes | Small |
-| F5 | Missing explicit Phase 2 behavior tests | Yes | Medium |
+| Fix | Problem area | Required before Phase 3 | Estimated complexity | Priority score |
+| --- | --- | --- | --- | --- |
+| F1 | Missing `lastErrorJson` contract | Yes | Small | 5 |
+| F2 | Incorrect `attemptCount` semantics across steps | Yes | Medium | 5 |
+| F3 | Runtime dies on store/infra failure | Yes | Medium | 4 |
+| F4 | Startup does not reclaim expired leases before workers run | Yes | Small | 4 |
+| F5 | Missing explicit Phase 2 behavior tests | Yes | Medium | 5 |
+| F6 | Backpressure semantics remain soft and undocumented | Yes | Medium | 4 |
+| F7 | Orchestrator ownership model is under-documented | No | Small | 2 |
 
 Complexity guidance:
 
 - **Small**: localized contract/model change; low refactor risk; usually 1-2 files plus tests
 - **Medium**: behavior spans multiple runtime/store components; moderate test surface; some design choices must be made explicit
 - **Large**: broad API or architecture change across packages; migration or major refactor required
+
+Priority score guidance:
+
+- **5**: contract-defining or correctness-critical; should land before further runtime/store evolution
+- **4**: strong correctness or operability improvement with limited design ambiguity
+- **3**: useful but can follow contract-freezing work
+- **2**: documentation/alignment work; important for clarity but not a functional blocker
+- **1**: optional or deferrable cleanup
 
 ---
 
@@ -260,7 +288,8 @@ Add focused tests that fail for the current broken behaviors and remain valuable
 2. step-local `attemptCount` tests across multi-step pipelines
 3. startup reclaim-before-workers test
 4. loop-survival tests for transient infrastructure exceptions
-5. retained existing tests for:
+5. backpressure contract tests that freeze the chosen `maxInFlight` semantics
+6. retained existing tests for:
    - backpressure at `maxInFlight`
    - retry backoff timing
    - watchdog reclaim/resume
@@ -281,6 +310,92 @@ Why:
 
 ---
 
+## F6 — Freeze And Implement Backpressure Semantics
+
+### Problem
+
+The current actor runtime computes ingress capacity by calling `countNonTerminal(runId)` and then later performing source poll plus `appendIngress(...)`. That is a time-of-check/time-of-use flow, so `maxInFlight` is currently a **soft throttle**, not a hard admission guarantee.
+
+Current impact:
+
+- concurrent runtime progress can change the real in-flight count between capacity check and append
+- the intended semantics are not frozen clearly enough for a future Postgres implementation
+- Phase 3 could otherwise harden the wrong contract into the durable store
+
+### Required changes
+
+1. Decide and document the v1 contract explicitly:
+   - recommended: `maxInFlight` is a best-effort runtime throttle in Phase 2
+   - if strict admission is required, that becomes a store-level contract change rather than an actor-loop patch
+2. Align runtime and spec language so `maxInFlight` is described consistently everywhere.
+3. If the chosen contract is hard admission instead of soft throttling:
+   - add or reshape a store operation so capacity enforcement and ingress append happen atomically
+   - keep orchestration actor-based; do not patch around this with local `Mutex` or ad hoc shared state
+4. Ensure `streams-contracts-v1.md`, `streams-delivery-phases.md`, and `streams-technical-requirements.md` all describe the same behavior.
+
+### Required tests
+
+- runtime test: current `maxInFlight` behavior is covered explicitly as soft throttle or hard cap, depending on the chosen contract
+- contract test: spec wording and runtime behavior match for ingress admission
+- if hard admission is chosen: store test proving atomic capacity enforcement
+
+### Estimated complexity
+
+**Medium**
+
+Why:
+
+- this freezes a contract boundary between runtime and store
+- it affects future Postgres implementation shape
+- the code change may be small, but the semantic decision is important
+
+### Implementation notes
+
+- Prefer actor-owned coordination for runtime loops.
+- If strict semantics are needed, solve them at the store boundary rather than by layering more in-memory coordination on top of the current actors.
+
+---
+
+## F7 — Document Orchestrator Ownership And Lifecycle More Precisely
+
+### Problem
+
+The actor-based runtime is implemented, but some docs still speak in earlier design language about open scope/lifecycle questions. The current implementation actually derives actor ownership from the caller coroutine context through `spawn(...)` and optionally accepts a dispatcher in `createPipelineOrchestrator(...)`.
+
+Current impact:
+
+- readers can infer capabilities that do not exist, such as explicit scope injection
+- architecture docs lag the implementation details that matter for embedding and shutdown
+- future integration work may make wrong assumptions about lifecycle ownership
+
+### Required changes
+
+1. Document that the application creates the orchestrator.
+2. Document that actor ownership is rooted in the caller coroutine context at creation time.
+3. Document that dispatcher selection is configurable, but explicit scope injection is not currently part of the API.
+4. Remove outdated wording that still presents this as an unresolved design question.
+
+### Required tests
+
+- no new code tests required
+- documentation references should be updated together so the ownership story is consistent across the active specs
+
+### Estimated complexity
+
+**Small**
+
+Why:
+
+- documentation-only change
+- no runtime behavior change required
+
+### Implementation notes
+
+- Keep the durable architecture record in `actor-based-runtime.md`.
+- Use this fix to align all active docs, not to add a new lifecycle API.
+
+---
+
 ## Recommended Delivery Order
 
 Apply the fixes in this order:
@@ -289,14 +404,18 @@ Apply the fixes in this order:
 2. **F2 — `attemptCount` semantics**
 3. **F4 — startup reclaim before workers**
 4. **F3 — loop resilience on infra failure**
-5. **F5 — fill remaining contract tests**
+5. **F6 — freeze backpressure semantics**
+6. **F5 — fill remaining contract tests**
+7. **F7 — align orchestrator ownership docs**
 
 Reasoning:
 
 - F1 and F2 freeze the entity/runtime semantics that Postgres must implement.
 - F4 is small and closes a correctness gap in restart behavior.
-- F3 is the most behaviorally sensitive runtime change and is easier to implement after the store/runtime contracts are corrected.
+- F3 is behaviorally sensitive and is easier to implement after the store/runtime contracts are corrected.
+- F6 freezes another runtime/store boundary before Phase 3 hardens it.
 - F5 finalizes the guardrails once the target semantics are settled.
+- F7 should land alongside the final cleanup pass so the docs describe the implemented architecture accurately.
 
 ---
 
@@ -308,6 +427,7 @@ Phase 2 should not be treated as complete until all of the following are true:
 - `attemptCount` semantics are explicitly step-local and proven by tests across step transitions
 - startup recovery reclaims expired leases before worker execution begins
 - ingestion, worker, and watchdog loops survive transient infrastructure failures with bounded backoff
+- backpressure semantics are explicitly frozen and matched by runtime/store behavior
 - the test suite contains direct coverage for these behaviors
 
 Only after these are true should Phase 3 start as the durable implementation of a stable contract.

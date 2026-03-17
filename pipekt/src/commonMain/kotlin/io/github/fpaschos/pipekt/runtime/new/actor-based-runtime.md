@@ -6,7 +6,7 @@
 
 **Scope:** This document defines actor boundaries, ownership, and terminology only. It does not define the full execution algorithm, storage schema, or worker internals.
 
-**Related:** [streams-delivery-phases.md](../../../../../../../specs/streams-delivery-phases.md), [streams-delivery-additions.md](../../../../../../../specs/streams-delivery-additions.md), [pipeline-implementation-v2.md](../../../../../../../specs/pipeline-implementation-v2.md)
+**Related:** [streams-delivery-phases.md](../../../../../../../specs/streams-delivery-phases.md), [streams-delivery-additions.md](../../../../../../../specs/streams-delivery-additions.md), [streams-phase-2-fix-plan.md](../../../../../../../specs/streams-phase-2-fix-plan.md)
 
 ---
 

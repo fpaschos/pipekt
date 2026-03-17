@@ -12,9 +12,8 @@ These documents are the active source of truth for the current `pipekt` core mod
 - [streams-technical-requirements.md](./specs/streams-technical-requirements.md)
 - [streams-phase-2-fix-plan.md](./specs/streams-phase-2-fix-plan.md)
 - [streams-example-earthquake-enrichment.md](./specs/streams-example-earthquake-enrichment.md)
-- [pipeline-implementation-v2.md](./specs/pipeline-implementation-v2.md)
 
-Read them in that order. `streams-delivery-additions.md` supplements `streams-delivery-phases.md` with critical fixes, architecture decisions, and the Postgres schema reference; read it alongside or immediately after the phases doc. `streams-technical-requirements.md` covers orthogonal runtime concerns (default values, error handling, DB performance, pipeline registry, and code organization); read it before implementing Phase 2 or application wiring. `streams-phase-2-fix-plan.md` is the concrete remediation checklist for the current runtime/store drift and should be read before declaring Phase 2 complete or starting Phase 3.
+Read them in that order. `streams-delivery-additions.md` supplements `streams-delivery-phases.md` with critical fixes, architecture decisions, and the Postgres schema reference; read it alongside or immediately after the phases doc. `streams-technical-requirements.md` covers orthogonal runtime concerns (default values, error handling, DB performance, pipeline registry, and code organization); read it before implementing Phase 2 or application wiring. `streams-phase-2-fix-plan.md` is the concrete remediation checklist for the current runtime/store drift, now including the remaining `runtime.new` findings and the already-addressed v2 architecture reference; read it before declaring Phase 2 complete or starting Phase 3.
 
 ## Runtime-Local Notes
 
