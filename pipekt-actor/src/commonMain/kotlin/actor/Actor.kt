@@ -194,6 +194,9 @@ internal class ActorRuntime<Command : Any>(
     // Stop can be requested while STARTING; we detect it after postStart and fail startup consistently.
     private val stopRequest = atomic<Any?>(UNSET_STOP_TIMEOUT)
     private val preStopExecuted = atomic(false)
+
+    // Timer generations make replacement and cancellation stronger than plain job cancellation:
+    // even if an old timer already enqueued a fire event, stale generations are dropped later.
     private val activeTimers = mutableMapOf<TimerKey, ActiveTimer>()
     private val nextTimerGeneration = mutableMapOf<TimerKey, Long>()
 
@@ -403,6 +406,8 @@ internal class ActorRuntime<Command : Any>(
 
             is SystemEvent.TimerFired -> {
                 val timer = activeTimers[event.key] ?: return true
+                // Timer replacement/cancellation is linearized by generation. A queued fire from an
+                // older timer instance is ignored here even if its coroutine managed to enqueue it.
                 if (timer.generation != event.generation) {
                     return true
                 }
@@ -551,11 +556,6 @@ internal class ActorRuntime<Command : Any>(
         check(canScheduleTimers()) { "Actor $label cannot schedule timers while shutting down." }
         require(timerDelay >= Duration.ZERO) { "Timer delay must be non-negative." }
 
-        if (mode == TimerMode.Once && timerDelay == Duration.ZERO) {
-            selfRef.tell(command).getOrThrow()
-            return
-        }
-
         val generation = (nextTimerGeneration[key] ?: 0L) + 1L
         nextTimerGeneration[key] = generation
         activeTimers.remove(key)?.job?.cancel()
@@ -563,7 +563,23 @@ internal class ActorRuntime<Command : Any>(
             ActiveTimer(
                 generation = generation,
                 mode = mode,
-                job = launchTimerJob(key = key, generation = generation, timerDelay = timerDelay, command = command, mode = mode),
+                job =
+                    if (mode == TimerMode.Once && timerDelay == Duration.ZERO) {
+                        // Zero-delay still routes through the internal timer queue instead of
+                        // self.tell(). That keeps startup-time scheduling valid before RUNNING and
+                        // preserves stale-generation suppression.
+                        scope.launch {
+                            enqueueTimerFire(key = key, generation = generation, command = command)
+                        }
+                    } else {
+                        launchTimerJob(
+                            key = key,
+                            generation = generation,
+                            timerDelay = timerDelay,
+                            command = command,
+                            mode = mode,
+                        )
+                    },
             )
     }
 
@@ -587,6 +603,8 @@ internal class ActorRuntime<Command : Any>(
     }
 
     private fun cancelAllActiveTimers() {
+        // Shutdown must detach timers before the runtime finishes draining work so no timer
+        // outlives the actor or reintroduces commands during teardown.
         activeTimers.values.forEach { timer -> timer.job.cancel() }
         activeTimers.clear()
     }

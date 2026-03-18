@@ -31,9 +31,9 @@ interface ActorTimers<Command : Any> {
     /**
      * Schedules [command] to be sent once to the current actor after [delay].
      *
-     * Reusing [key] replaces the existing timer for that key. A [delay] of [ZERO] bypasses timer
-     * scheduling and immediately enqueues a normal self-message using the actor's standard
-     * admission rules.
+     * Reusing [key] replaces the existing timer for that key. A [delay] of [ZERO] still flows
+     * through the runtime's internal timer delivery path so startup-time self-scheduling and stale
+     * replacement suppression remain correct.
      */
     suspend fun once(
         key: TimerKey,
@@ -149,6 +149,7 @@ internal class DefaultActorContext<Command : Any>(
     override val self: ActorRef<Command>,
     private val runtime: ActorRuntime<Command>,
 ) : ActorContext<Command> {
+    // Watch mappings are owned by the watcher. They are removed after the first termination event.
     private val watchMappers = mutableMapOf<Long, Pair<ActorRuntime<*>, (ActorTermination) -> Command>>()
     private val watchedActors = mutableMapOf<ActorRuntime<*>, Long>()
     private var nextWatchToken: Long = 0
@@ -191,6 +192,8 @@ internal class DefaultActorContext<Command : Any>(
         token: Long,
         termination: ActorTermination,
     ): Command? {
+        // Watch delivery is one-shot. Once a termination is mapped back into a user command, the
+        // watcher must no longer consider that watch active.
         val (target, mapper) = watchMappers.remove(token) ?: return null
         watchedActors.remove(target)
         return mapper(termination)

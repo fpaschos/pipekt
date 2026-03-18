@@ -5,6 +5,7 @@ import io.github.fpaschos.pipekt.actor.ActorContext
 import io.github.fpaschos.pipekt.actor.ActorRef
 import io.github.fpaschos.pipekt.actor.ActorTermination
 import io.github.fpaschos.pipekt.actor.ReplyRef
+import io.github.fpaschos.pipekt.actor.TimerKey
 import io.github.fpaschos.pipekt.actor.ask
 import io.github.fpaschos.pipekt.actor.spawn
 import io.github.fpaschos.pipekt.core.KotlinxPayloadSerializer
@@ -12,10 +13,6 @@ import io.github.fpaschos.pipekt.core.PayloadSerializer
 import io.github.fpaschos.pipekt.core.PipelineDefinition
 import io.github.fpaschos.pipekt.store.DurableStore
 import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.ZERO
@@ -393,8 +390,10 @@ private class IngressWorkerActor(
     private val runtime: PipelineRuntime,
     private val config: RuntimeConfig,
 ) : Actor<WorkerCommand>() {
+    private val tickTimerKey = TimerKey("ingress-worker-tick")
+
     override suspend fun postStart(ctx: ActorContext<WorkerCommand>) {
-        scheduleCommand(ctx, ZERO, WorkerCommand.Tick)
+        ctx.timers.once(tickTimerKey, ZERO, WorkerCommand.Tick)
     }
 
     override suspend fun handle(
@@ -410,7 +409,7 @@ private class IngressWorkerActor(
                     } else {
                         false
                     }
-                scheduleCommand(ctx, if (processed) ZERO else config.workerPollInterval, WorkerCommand.Tick)
+                ctx.timers.once(tickTimerKey, if (processed) ZERO else config.workerPollInterval, WorkerCommand.Tick)
             }
         }
     }
@@ -421,8 +420,10 @@ private class StepWorkerActor(
     private val config: RuntimeConfig,
     private val stepName: String,
 ) : Actor<WorkerCommand>() {
+    private val tickTimerKey = TimerKey("step-worker-tick")
+
     override suspend fun postStart(ctx: ActorContext<WorkerCommand>) {
-        scheduleCommand(ctx, ZERO, WorkerCommand.Tick)
+        ctx.timers.once(tickTimerKey, ZERO, WorkerCommand.Tick)
     }
 
     override suspend fun handle(
@@ -432,7 +433,7 @@ private class StepWorkerActor(
         when (command) {
             WorkerCommand.Tick -> {
                 val processed = runtime.executeStep(stepName = stepName, workerId = ctx.label)
-                scheduleCommand(ctx, if (processed) ZERO else config.workerPollInterval, WorkerCommand.Tick)
+                ctx.timers.once(tickTimerKey, if (processed) ZERO else config.workerPollInterval, WorkerCommand.Tick)
             }
         }
     }
@@ -446,8 +447,10 @@ private class LeaseReclaimerActor(
     private val store: DurableStore,
     private val config: RuntimeConfig,
 ) : Actor<LeaseReclaimerCommand>() {
+    private val tickTimerKey = TimerKey("lease-reclaimer-tick")
+
     override suspend fun postStart(ctx: ActorContext<LeaseReclaimerCommand>) {
-        scheduleCommand(ctx, config.watchdogInterval, LeaseReclaimerCommand.Tick)
+        ctx.timers.once(tickTimerKey, config.watchdogInterval, LeaseReclaimerCommand.Tick)
     }
 
     override suspend fun handle(
@@ -460,21 +463,8 @@ private class LeaseReclaimerActor(
                     now = Clock.System.now(),
                     limit = config.workerClaimLimit,
                 )
-                scheduleCommand(ctx, config.watchdogInterval, LeaseReclaimerCommand.Tick)
+                ctx.timers.once(tickTimerKey, config.watchdogInterval, LeaseReclaimerCommand.Tick)
             }
         }
-    }
-}
-
-private suspend fun <Command : Any> scheduleCommand(
-    ctx: ActorContext<Command>,
-    delay: Duration,
-    command: Command,
-) {
-    CoroutineScope(currentCoroutineContext()).launch {
-        if (delay > ZERO) {
-            delay(delay)
-        }
-        ctx.self.tell(command)
     }
 }

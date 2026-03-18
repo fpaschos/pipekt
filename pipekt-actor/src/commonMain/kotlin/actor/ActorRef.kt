@@ -31,6 +31,12 @@ enum class ActorUnavailableReason {
     NOT_DELIVERED,
 }
 
+/**
+ * Failure reported when an actor rejects a command before processing it, or when an already
+ * accepted command becomes undeliverable because the actor shuts down.
+ *
+ * @property reason Why the actor was unavailable.
+ */
 class ActorUnavailable(
     val reason: ActorUnavailableReason,
     label: String,
@@ -64,14 +70,38 @@ data class ActorTermination(
 
 /**
  * Generic typed handle to an actor.
+ *
+ * An [ActorRef] is the public entry point for sending commands to an actor and, when types align,
+ * it can also be used directly as a [ReplyRef].
+ *
+ * ### Admission
+ * - [tell] is non-suspending.
+ * - Commands are accepted only while the actor is running.
+ * - Rejection is reported via [Result.failure] with [ActorUnavailable].
+ *
+ * ### Lifecycle
+ * - [shutdown] requests cooperative actor termination and waits for completion.
+ * - Actor code must not call [shutdown] on itself; use [ActorContext.stopSelf] instead.
  */
 interface ActorRef<in Command : Any> : ReplyRef<Command> {
     val name: String
 
     val label: String
 
+    /**
+     * Attempts to enqueue [reply] for this actor.
+     *
+     * Returns success only if the actor is currently running and its mailbox can accept the
+     * command.
+     */
     override fun tell(reply: Command): Result<Unit>
 
+    /**
+     * Requests cooperative shutdown and waits for termination.
+     *
+     * When [timeout] is not `null`, it bounds mailbox draining after shutdown begins; it does not
+     * bound total termination time or interrupt the command currently running on the actor loop.
+     */
     suspend fun shutdown(timeout: Duration? = null)
 }
 
@@ -90,6 +120,19 @@ data class DefaultActorRef<Command : Any> internal constructor(
 
 /**
  * Universal request/reply helper built on reply-bearing commands.
+ *
+ * This helper creates a temporary one-shot [ReplyRef], builds a command using [block], sends it,
+ * and then waits for the first reply until [timeout] elapses.
+ *
+ * Failure mapping:
+ * - enqueue rejection is returned directly
+ * - timeout becomes [ActorAskTimeout]
+ * - handler failure after acceptance may surface as [ActorCommandFailed]
+ * - shutdown/failure before delivery may surface as [ActorUnavailable]
+ *
+ * ### `block` behavior
+ * - Invoked synchronously in the caller's coroutine before enqueue.
+ * - Must construct exactly one command that embeds the provided reply ref.
  */
 suspend fun <Command : Any, Reply> ActorRef<Command>.ask(
     timeout: Duration,
