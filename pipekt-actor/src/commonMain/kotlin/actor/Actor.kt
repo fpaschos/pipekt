@@ -13,6 +13,8 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ChannelResult
 import kotlinx.coroutines.channels.getOrElse
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
@@ -39,15 +41,21 @@ private data class CommandEnvelope<Command : Any>(
     val askReply: AskReplyHandle? = null,
 )
 
-private sealed interface SystemEvent {
+private sealed interface SystemEvent<out Command : Any> {
     data class Stop(
         val timeout: Duration?,
-    ) : SystemEvent
+    ) : SystemEvent<Nothing>
 
     data class WatchNotification(
         val token: Long,
         val termination: ActorTermination,
-    ) : SystemEvent
+    ) : SystemEvent<Nothing>
+
+    data class TimerFired<Command : Any>(
+        val key: TimerKey,
+        val generation: Long,
+        val command: Command,
+    ) : SystemEvent<Command>
 }
 
 private sealed interface WatchState {
@@ -176,7 +184,7 @@ internal class ActorRuntime<Command : Any>(
 ) {
     private val scope = createActorScope(parentScope, name, dispatcher)
     private val mailbox = Channel<CommandEnvelope<Command>>(actor.capacity)
-    private val systemQueue = Channel<SystemEvent>(capacity = Channel.UNLIMITED)
+    private val systemQueue = Channel<SystemEvent<Command>>(capacity = Channel.UNLIMITED)
     private val started = CompletableDeferred<Unit>()
     private val terminated = CompletableDeferred<Unit>()
     private val lifecycle = atomic(ActorLifecycle.STARTING)
@@ -186,6 +194,8 @@ internal class ActorRuntime<Command : Any>(
     // Stop can be requested while STARTING; we detect it after postStart and fail startup consistently.
     private val stopRequest = atomic<Any?>(UNSET_STOP_TIMEOUT)
     private val preStopExecuted = atomic(false)
+    private val activeTimers = mutableMapOf<TimerKey, ActiveTimer>()
+    private val nextTimerGeneration = mutableMapOf<TimerKey, Long>()
 
     private lateinit var selfRef: DefaultActorRef<Command>
     internal lateinit var loopJob: Job
@@ -197,6 +207,8 @@ internal class ActorRuntime<Command : Any>(
     }
 
     fun canRegisterWatches(): Boolean = lifecycle.value != ActorLifecycle.SHUTTING_DOWN && lifecycle.value != ActorLifecycle.SHUTDOWN
+
+    fun canScheduleTimers(): Boolean = lifecycle.value != ActorLifecycle.SHUTTING_DOWN && lifecycle.value != ActorLifecycle.SHUTDOWN
 
     fun start(actor: Actor<Command>) {
         check(!::loopJob.isInitialized) { "Actor runtime for $label already started." }
@@ -214,6 +226,7 @@ internal class ActorRuntime<Command : Any>(
                         val cause = CancellationException("$label was stopped during startup")
                         terminalCause.compareAndSet(null, cause)
                         notifyStartFail(cause)
+                        cancelAllActiveTimers()
                         mailbox.close()
                         runPreStop(actor, ctx)
                         dropPendingCommands(actor, ctx)
@@ -251,6 +264,7 @@ internal class ActorRuntime<Command : Any>(
                 } catch (ce: CancellationException) {
                     terminalCause.compareAndSet(null, ce)
                     lifecycle.value = ActorLifecycle.SHUTTING_DOWN
+                    cancelAllActiveTimers()
                     mailbox.close(ce)
                     notifyStartFail(ce)
                     runPreStop(actor, ctx)
@@ -259,6 +273,7 @@ internal class ActorRuntime<Command : Any>(
                 } catch (t: Throwable) {
                     terminalCause.compareAndSet(null, t)
                     lifecycle.value = ActorLifecycle.SHUTTING_DOWN
+                    cancelAllActiveTimers()
                     mailbox.close(t)
                     notifyStartFail(t)
                     runPreStop(actor, ctx)
@@ -354,11 +369,12 @@ internal class ActorRuntime<Command : Any>(
     private suspend fun handleSystemEvent(
         actor: Actor<Command>,
         ctx: DefaultActorContext<Command>,
-        event: SystemEvent,
+        event: SystemEvent<Command>,
     ): Boolean =
         when (event) {
             is SystemEvent.Stop -> {
                 lifecycle.value = ActorLifecycle.SHUTTING_DOWN
+                cancelAllActiveTimers()
                 mailbox.close()
                 runPreStop(actor, ctx)
 
@@ -382,6 +398,18 @@ internal class ActorRuntime<Command : Any>(
             is SystemEvent.WatchNotification -> {
                 val mapped = ctx.dispatchWatchNotification(event.token, event.termination) ?: return true
                 handleCommand(actor, ctx, CommandEnvelope(mapped))
+                true
+            }
+
+            is SystemEvent.TimerFired -> {
+                val timer = activeTimers[event.key] ?: return true
+                if (timer.generation != event.generation) {
+                    return true
+                }
+                if (timer.mode == TimerMode.Once) {
+                    activeTimers.remove(event.key)
+                }
+                handleCommand(actor, ctx, CommandEnvelope(event.command))
                 true
             }
         }
@@ -512,7 +540,100 @@ internal class ActorRuntime<Command : Any>(
             scope.coroutineContext.job.cancel()
         }
     }
+
+    suspend fun scheduleTimer(
+        key: TimerKey,
+        timerDelay: Duration,
+        command: Command,
+        mode: TimerMode,
+    ) {
+        guardActorLoop()
+        check(canScheduleTimers()) { "Actor $label cannot schedule timers while shutting down." }
+        require(timerDelay >= Duration.ZERO) { "Timer delay must be non-negative." }
+
+        if (mode == TimerMode.Once && timerDelay == Duration.ZERO) {
+            selfRef.tell(command).getOrThrow()
+            return
+        }
+
+        val generation = (nextTimerGeneration[key] ?: 0L) + 1L
+        nextTimerGeneration[key] = generation
+        activeTimers.remove(key)?.job?.cancel()
+        activeTimers[key] =
+            ActiveTimer(
+                generation = generation,
+                mode = mode,
+                job = launchTimerJob(key = key, generation = generation, timerDelay = timerDelay, command = command, mode = mode),
+            )
+    }
+
+    suspend fun cancelTimer(key: TimerKey): Boolean {
+        guardActorLoop()
+        return activeTimers.remove(key)?.job?.let { job ->
+            job.cancel()
+            true
+        } ?: false
+    }
+
+    suspend fun cancelAllTimers() {
+        guardActorLoop()
+        cancelAllActiveTimers()
+    }
+
+    private suspend fun guardActorLoop() {
+        check(currentCoroutineContext()[ActorLoopContext]?.runtime === this) {
+            "This method must only be called only within actor $label coroutine."
+        }
+    }
+
+    private fun cancelAllActiveTimers() {
+        activeTimers.values.forEach { timer -> timer.job.cancel() }
+        activeTimers.clear()
+    }
+
+    private fun launchTimerJob(
+        key: TimerKey,
+        generation: Long,
+        timerDelay: Duration,
+        command: Command,
+        mode: TimerMode,
+    ): Job =
+        scope.launch {
+            when (mode) {
+                TimerMode.Once -> {
+                    delay(timerDelay)
+                    enqueueTimerFire(key = key, generation = generation, command = command)
+                }
+
+                TimerMode.Repeated -> {
+                    while (isActive) {
+                        delay(timerDelay)
+                        enqueueTimerFire(key = key, generation = generation, command = command)
+                    }
+                }
+            }
+        }
+
+    private fun enqueueTimerFire(
+        key: TimerKey,
+        generation: Long,
+        command: Command,
+    ) {
+        systemQueue.trySend(
+            SystemEvent.TimerFired(
+                key = key,
+                generation = generation,
+                command = command,
+            ),
+        )
+    }
 }
+
+private data class ActiveTimer(
+    val generation: Long,
+    val mode: TimerMode,
+    val job: Job,
+)
 
 private data object OwnedActorScope :
     AbstractCoroutineContextElement(Key) {

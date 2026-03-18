@@ -3,7 +3,71 @@ package io.github.fpaschos.pipekt.actor
 import kotlinx.coroutines.currentCoroutineContext
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
+import kotlin.jvm.JvmInline
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.ZERO
+
+/**
+ * Stable actor-local identity for a timer.
+ *
+ * Reusing the same key replaces the existing timer for that logical purpose. Keys are scoped to
+ * one actor instance; different actors may reuse the same [value] without interacting.
+ */
+@JvmInline
+value class TimerKey(
+    val value: String,
+)
+
+/**
+ * Loop-confined timer capability for actor self-messages.
+ *
+ * Timers are owned by the actor runtime rather than by detached coroutine jobs. Starting a timer
+ * with an existing [TimerKey] replaces the previous timer for that key, and stale messages from
+ * the replaced timer are suppressed even if they were already queued internally.
+ *
+ * All methods are loop-confined and fail if called outside the actor loop coroutine.
+ */
+interface ActorTimers<Command : Any> {
+    /**
+     * Schedules [command] to be sent once to the current actor after [delay].
+     *
+     * Reusing [key] replaces the existing timer for that key. A [delay] of [ZERO] bypasses timer
+     * scheduling and immediately enqueues a normal self-message using the actor's standard
+     * admission rules.
+     */
+    suspend fun once(
+        key: TimerKey,
+        delay: Duration,
+        command: Command,
+    )
+
+    /**
+     * Starts or replaces a fixed-delay repeating self-message timer.
+     *
+     * After each firing, the next delay starts counting from that firing. The runtime does not
+     * attempt fixed-rate catch-up behavior. Reusing [key] replaces the existing timer for that key.
+     */
+    suspend fun repeated(
+        key: TimerKey,
+        interval: Duration,
+        command: Command,
+    )
+
+    /**
+     * Cancels the active timer for [key].
+     *
+     * Returns `true` when a timer was active and has been canceled. Returns `false` when no timer
+     * was active for [key]. Calling this for a previously canceled key is safe.
+     */
+    suspend fun cancel(key: TimerKey): Boolean
+
+    /**
+     * Cancels all active timers for the current actor.
+     *
+     * Timers are also canceled automatically when actor shutdown begins.
+     */
+    suspend fun cancelAll()
+}
 
 /**
  * Loop-confined runtime capability surface exposed to concrete actors.
@@ -19,6 +83,11 @@ interface ActorContext<Command : Any> {
     val label: String
 
     val self: ActorRef<Command>
+
+    /**
+     * Actor-owned keyed timers for delayed and repeating self-messages.
+     */
+    val timers: ActorTimers<Command>
 
     /**
      * Guards actor-loop-only access.
@@ -83,6 +152,7 @@ internal class DefaultActorContext<Command : Any>(
     private val watchMappers = mutableMapOf<Long, Pair<ActorRuntime<*>, (ActorTermination) -> Command>>()
     private val watchedActors = mutableMapOf<ActorRuntime<*>, Long>()
     private var nextWatchToken: Long = 0
+    override val timers: ActorTimers<Command> = DefaultActorTimers(runtime)
 
     override suspend fun guardActorAccess() {
         check(currentCoroutineContext()[ActorLoopContext]?.runtime === runtime) {
@@ -131,4 +201,45 @@ internal class ActorLoopContext(
     val runtime: ActorRuntime<*>,
 ) : AbstractCoroutineContextElement(Key) {
     companion object Key : CoroutineContext.Key<ActorLoopContext>
+}
+
+internal class DefaultActorTimers<Command : Any>(
+    private val runtime: ActorRuntime<Command>,
+) : ActorTimers<Command> {
+    override suspend fun once(
+        key: TimerKey,
+        delay: Duration,
+        command: Command,
+    ) {
+        runtime.scheduleTimer(
+            key = key,
+            timerDelay = delay,
+            command = command,
+            mode = TimerMode.Once,
+        )
+    }
+
+    override suspend fun repeated(
+        key: TimerKey,
+        interval: Duration,
+        command: Command,
+    ) {
+        runtime.scheduleTimer(
+            key = key,
+            timerDelay = interval,
+            command = command,
+            mode = TimerMode.Repeated,
+        )
+    }
+
+    override suspend fun cancel(key: TimerKey): Boolean = runtime.cancelTimer(key)
+
+    override suspend fun cancelAll() {
+        runtime.cancelAllTimers()
+    }
+}
+
+internal enum class TimerMode {
+    Once,
+    Repeated,
 }

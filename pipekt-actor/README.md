@@ -8,9 +8,10 @@ The module targets the same KMP setup as the rest of the project and is intended
 
 The [`specs/`](./specs/) folder documents the runtime behavior and the implementation constraints for this module.
 
-- [`actor-semantics.md`](/Users/fpaschos/Dev/pipekt/pipekt-actor/specs/actor-semantics.md): the current source-of-truth behavior of the runtime. It describes actor construction, lifecycle, mailbox admission, system-vs-user queue ordering, `ask()`/`replyTo`, watch delivery, shutdown, cancellation, and failure handling.
-- [`semantic-decisions.md`](/Users/fpaschos/Dev/pipekt/pipekt-actor/specs/semantic-decisions.md): the condensed list of design decisions the runtime currently follows. Use this as the short technical requirements summary for why the runtime behaves the way it does.
-- [`actor-implementation-plan-v2.md`](/Users/fpaschos/Dev/pipekt/pipekt-actor/specs/actor-implementation-plan-v2.md): the implementation checklist for the current actor model refactor. It captures the required behavior to implement and validate, including API changes, shutdown semantics, watch guarantees, and test coverage expectations.
+- [`actor-semantics.md`](./specs/actor-semantics.md): the current source-of-truth behavior of the runtime. It describes actor construction, lifecycle, mailbox admission, system-vs-user queue ordering, `ask()`/`replyTo`, watch delivery, shutdown, cancellation, and failure handling.
+- [`semantic-decisions.md`](./specs/semantic-decisions.md): the condensed list of design decisions the runtime currently follows. Use this as the short technical requirements summary for why the runtime behaves the way it does.
+- [`actor-implementation-plan-v2.md`](./specs/actor-implementation-plan-v2.md): the implementation checklist for the current actor model refactor. It captures the required behavior to implement and validate, including API changes, shutdown semantics, watch guarantees, and test coverage expectations.
+- [`actor-context-capabilities.md`](./specs/actor-context-capabilities.md): the actor-facing capability surface of `ActorContext`, including current loop-confined operations and timer design guidance for future API work.
 
 ## Technical requirements
 
