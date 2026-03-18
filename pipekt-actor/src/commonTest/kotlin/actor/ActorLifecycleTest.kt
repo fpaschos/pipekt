@@ -63,6 +63,19 @@ class ActorLifecycleTest :
             }
         }
 
+        test("parent actor shutdown can explicitly stop watched actors before termination completes") {
+            runTest {
+                val events = EventRecorder()
+                val childRef = CompletableDeferred<ActorRef<ChildCommand>>()
+                val ref = spawn("parent-actor") { ParentActor(events, childRef = childRef) }
+
+                ref.shutdown()
+                advanceUntilIdle()
+
+                events.snapshot().shouldContain("child:postStop")
+            }
+        }
+
         test("startup failure does not publish a half-started ref") {
             runTest {
                 val failure =

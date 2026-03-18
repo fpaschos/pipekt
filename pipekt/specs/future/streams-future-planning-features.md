@@ -123,6 +123,7 @@ Possible future additions:
 - dynamic worker balancing
 - throughput-aware throttling
 - richer lease and heartbeat controls
+- optional partition-aware ordered execution; see [streams-runtime-ordering-and-observability-plan.md](./streams-runtime-ordering-and-observability-plan.md)
 
 Potential value:
 
@@ -213,6 +214,7 @@ Possible future additions:
 - replay tooling
 - admin APIs for run control
 - **pipeline graph visualizer**: `pipekit graph --pipeline <name>` — prints an ASCII diagram of the pipeline operator chain with current item counts per step; useful for debugging stuck pipelines
+- richer runtime snapshots and inspection surfaces; see [streams-runtime-ordering-and-observability-plan.md](./streams-runtime-ordering-and-observability-plan.md)
 
 Note: the `pipekit` CLI itself (commands: `status`, `inspect`, `retry`, `tail`, `drain`) is a **delivery item** in Phase 7 of `streams-delivery-phases.md`, not a future feature. It is included here only for the graph visualizer command which is deferred beyond Phase 7.
 

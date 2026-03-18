@@ -1,7 +1,10 @@
 package io.github.fpaschos.pipekt.actor
 
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.collections.shouldHaveSize
+import io.kotest.matchers.result.shouldBeSuccess
+import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
 import kotlinx.coroutines.CompletableDeferred
@@ -40,6 +43,23 @@ class ActorWatchTest :
                 val childEvents = events.snapshot().filter { it.startsWith("parent:child-terminated:") }
                 childEvents.shouldHaveSize(1)
                 childEvents.single().shouldContain("child-boom")
+
+                ref.shutdown()
+            }
+        }
+
+        test("watched actor failure does not automatically crash the watcher") {
+            runTest {
+                val events = EventRecorder()
+                val ref = spawn("parent-survives-child") { ParentActor(events) }
+
+                ref.ask(1.seconds) { replyTo -> ParentCommand.FailChild(replyTo) }.shouldBeSuccess(Unit)
+                advanceUntilIdle()
+
+                ref
+                    .ask(1.seconds) { replyTo -> ParentCommand.SnapshotEvents(replyTo) }
+                    .getOrThrow()
+                    .any { it.contains("child-boom") } shouldBe true
 
                 ref.shutdown()
             }
