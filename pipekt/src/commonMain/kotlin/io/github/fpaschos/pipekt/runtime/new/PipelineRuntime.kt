@@ -7,9 +7,7 @@ import io.github.fpaschos.pipekt.core.IngressRecord
 import io.github.fpaschos.pipekt.core.ItemFailure
 import io.github.fpaschos.pipekt.core.PayloadSerializer
 import io.github.fpaschos.pipekt.core.PipelineDefinition
-import io.github.fpaschos.pipekt.core.SourceAdapter
 import io.github.fpaschos.pipekt.core.SourceDef
-import io.github.fpaschos.pipekt.core.SourceRecord
 import io.github.fpaschos.pipekt.core.StepCtx
 import io.github.fpaschos.pipekt.core.StepDef
 import io.github.fpaschos.pipekt.store.DurableStore

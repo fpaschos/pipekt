@@ -160,9 +160,7 @@ class RecordingActor(
         command: TestCommand,
     ) {
         when (command) {
-            is TestCommand.Record -> {
-                Unit
-            }
+            is TestCommand.Record -> {}
 
             is TestCommand.Ping -> {
                 command.replyTo.tell("echo: ${command.value}")
@@ -180,9 +178,7 @@ class RecordingActor(
                 command.replyTo.tell("echo: ${command.value}")
             }
 
-            is TestCommand.Block -> {
-                Unit
-            }
+            is TestCommand.Block -> {}
 
             is TestCommand.LoopName -> {
                 command.replyTo.tell(null)

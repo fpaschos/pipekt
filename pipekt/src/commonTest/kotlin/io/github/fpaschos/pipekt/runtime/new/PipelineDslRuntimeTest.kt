@@ -125,49 +125,47 @@ class PipelineDslRuntimeTest :
                     }
                 }.shouldBeRight()
 
-            runBlocking {
-                val orchestrator =
-                    createPipelineOrchestrator(
-                        store = store,
-                        serializer = KotlinxPayloadSerializer,
+            val orchestrator =
+                createPipelineOrchestrator(
+                    store = store,
+                    serializer = KotlinxPayloadSerializer,
+                )
+
+            val executable =
+                with(orchestrator) {
+                    definition.start(
+                        planVersion = "v1",
+                        config =
+                            RuntimeConfig(
+                                workerPollInterval = 10.milliseconds,
+                                watchdogInterval = 25.milliseconds,
+                                leaseDuration = 2.seconds,
+                                workerClaimLimit = 8,
+                            ),
                     )
-
-                val executable =
-                    with(orchestrator) {
-                        definition.start(
-                            planVersion = "v1",
-                            config =
-                                RuntimeConfig(
-                                    workerPollInterval = 10.milliseconds,
-                                    watchdogInterval = 25.milliseconds,
-                                    leaseDuration = 2.seconds,
-                                    workerClaimLimit = 8,
-                                ),
-                        )
-                    }
-
-                try {
-                    waitUntil {
-                        adapter.ackedIds.size == 2
-                    }
-
-                    val run = store.findAllActiveRuns("backpressure-pipeline").single()
-                    delay(100.milliseconds)
-
-                    adapter.ackedIds.size shouldBe 2
-                    store.getAllWorkItems(run.id).size shouldBe 2
-                    store.countNonTerminal(run.id) shouldBe 2
-
-                    waitUntil {
-                        adapter.ackedIds.size == 5 && store.countNonTerminal(run.id) == 0
-                    }
-
-                    store.getAllWorkItems(run.id).size shouldBe 5
-                    store.getAllWorkItems(run.id).all { it.status == WorkItemStatus.COMPLETED } shouldBe true
-                } finally {
-                    executable.stop()
-                    orchestrator.shutdown()
                 }
+
+            try {
+                waitUntil {
+                    adapter.ackedIds.size == 2
+                }
+
+                val run = store.findAllActiveRuns("backpressure-pipeline").single()
+                delay(100.milliseconds)
+
+                adapter.ackedIds.size shouldBe 2
+                store.getAllWorkItems(run.id).size shouldBe 2
+                store.countNonTerminal(run.id) shouldBe 2
+
+                waitUntil {
+                    adapter.ackedIds.size == 5 && store.countNonTerminal(run.id) == 0
+                }
+
+                store.getAllWorkItems(run.id).size shouldBe 5
+                store.getAllWorkItems(run.id).all { it.status == WorkItemStatus.COMPLETED } shouldBe true
+            } finally {
+                executable.stop()
+                orchestrator.shutdown()
             }
         }
 
