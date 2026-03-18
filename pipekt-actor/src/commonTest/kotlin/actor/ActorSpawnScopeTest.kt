@@ -1,5 +1,8 @@
 package io.github.fpaschos.pipekt.actor
 
+import io.github.fpaschos.pipekt.fixtures.MinimalActor
+import io.github.fpaschos.pipekt.fixtures.SelfCapturingActor
+import io.github.fpaschos.pipekt.fixtures.TestCommand
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.result.shouldBeSuccess
 import io.kotest.matchers.shouldBe
@@ -46,7 +49,7 @@ class ActorSpawnScopeTest :
                         MinimalActor()
                     }
 
-                ref.ask<TestCommand, String?>(1.seconds) { replyTo -> TestCommand.LoopName(replyTo) }.shouldBeSuccess(ref.label)
+                ref.ask<TestCommand, String>(1.seconds) { replyTo -> TestCommand.LoopName(replyTo) }.shouldBeSuccess(ref.label)
 
                 ref.shutdown()
             }

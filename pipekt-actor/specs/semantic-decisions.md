@@ -5,17 +5,19 @@ This file records the design choices implemented by the current actor runtime.
 1. Keep a bounded user mailbox with fail-fast `tell()`.
    `tell()` is non-suspending and reports `MAILBOX_FULL` or `ACTOR_CLOSED`.
 
-2. Keep external `ask()`, but model replies with `replyTo: ReplyRef<T>`.
-   `ask()` remains a convenience API layered on top of normal actor messaging.
+2. Keep external `ask()`, but model replies with `replyTo: ActorRef<T>`.
+   `ask()` remains a convenience API layered on top of normal actor messaging by creating a
+   temporary one-shot actor ref to receive the reply.
 
-3. Make `ActorRef<Command>` extend `ReplyRef<Command>`.
-   Compatible actor refs can be used directly as `replyTo`.
+3. Use `ActorRef<T>` directly for request/reply protocols.
+   Compatible actor refs can be used directly as `replyTo`, so actor-to-actor replies stay normal
+   actor messaging.
 
 4. Remove the old `ReplyChannel` / `ReplyRequest` / `Request` transport.
-   The runtime now uses typed reply refs plus internal ask bookkeeping.
+   The runtime now uses typed actor refs for replies plus internal ask bookkeeping.
 
 5. Keep `ask()` one-shot.
-   The first reply wins for the temporary ask reply ref; later replies are rejected.
+   The first reply wins for the temporary ask reply actor ref; later replies are rejected.
 
 6. Separate user commands from system events.
    Stop and watch notifications use a dedicated internal system queue.

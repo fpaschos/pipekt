@@ -1,5 +1,13 @@
 package io.github.fpaschos.pipekt.actor
 
+import io.github.fpaschos.pipekt.fixtures.CancellationCleanupActor
+import io.github.fpaschos.pipekt.fixtures.ChildCommand
+import io.github.fpaschos.pipekt.fixtures.EventRecorder
+import io.github.fpaschos.pipekt.fixtures.FailingStartActor
+import io.github.fpaschos.pipekt.fixtures.FailingTeardownActor
+import io.github.fpaschos.pipekt.fixtures.MinimalActor
+import io.github.fpaschos.pipekt.fixtures.ParentActor
+import io.github.fpaschos.pipekt.fixtures.TestCommand
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.collections.shouldContainExactly

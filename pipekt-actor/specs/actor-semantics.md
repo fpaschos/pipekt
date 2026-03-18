@@ -25,8 +25,8 @@ The source code is the single source of truth. If this file and the code disagre
 | Cleanup | `preStop(ctx)` and `postStop(ctx)` run in `NonCancellable`. `preStop` is executed at most once. |
 | Handler failure | If `handle(...)` throws a non-cancellation failure, `onCommandFailure(...)` runs, the current ask reply is failed with `ActorCommandFailed`, queued ask replies are failed as `NOT_DELIVERED`, and the actor terminates. |
 | Undelivered commands | Dropped queued user commands are reported through `onUndeliveredCommand(ctx, command, NOT_DELIVERED)`. If a dropped command came from external `ask()`, that caller fails with `ActorUnavailable(NOT_DELIVERED)`. |
-| Request/reply | Commands that expect a reply carry `replyTo: ReplyRef<T>`. External `ask()` creates a temporary one-shot `ReplyRef`, sends the command, and waits with timeout. The first reply wins. |
-| Actor-to-actor replies | `ActorRef<Command>` extends `ReplyRef<Command>`, so a normal actor ref can be used directly as `replyTo` when protocols line up. |
+| Request/reply | Commands that expect a reply carry `replyTo: ActorRef<T>`. External `ask()` creates a temporary one-shot actor ref, sends the command, and waits with timeout. The first reply wins. |
+| Actor-to-actor replies | A normal actor ref can be used directly as `replyTo` when protocols line up, so replies stay ordinary actor messaging. |
 | Watching | `watch(ref)` is loop-confined, accepts only `DefaultActorRef`, rejects self-watch, and rejects new registration while the watcher is shutting down. |
 | Watch semantics | Watches are idempotent per watcher/target pair while active. Duplicate `watch(target, ...)` calls are a no-op and keep the first mapper. |
 | Watch delivery | Successful watch registration guarantees that target termination is enqueued onto the watcher system queue instead of competing with user mailbox capacity. If the target already terminated, notification is enqueued immediately. |

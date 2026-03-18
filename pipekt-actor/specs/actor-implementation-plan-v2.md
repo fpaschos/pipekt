@@ -6,15 +6,15 @@ Final implementation/planning list:
 2. Keep external `ask()`, but redefine request/reply around Akka-style `replyTo`.
    `ask()` remains an external convenience API, not a backpressure API.
 
-3. Extend `ActorRef` from `ReplyRef`.
-   `ActorRef<Command>` should implement `ReplyRef<Command>` so normal actor refs can be used directly as `replyTo`.
+3. Use `ActorRef<T>` directly as the reply target type.
+   Normal actor refs should be used directly as `replyTo`.
 
 4. Remove the old request/reply model entirely.
    No compatibility layer.
    Migrate away from `ReplyChannel`, `ReplyRequest`, `Request`, and the old deferred reply transport.
 
-5. Reimplement external `ask()` using an internal temporary one-shot reply ref.
-   `ask()` creates a temporary reply sink, builds the command with `replyTo`, sends it, then awaits one reply or timeout.
+5. Reimplement external `ask()` using an internal temporary one-shot actor ref.
+   `ask()` creates a temporary reply actor, builds the command with `replyTo`, sends it, then awaits one reply or timeout.
 
 6. Make temporary ask replies one-shot strict.
    First reply wins.
@@ -94,22 +94,19 @@ Final implementation/planning list:
 
 27. Define reply delivery semantics clearly.
     Recommendation:
-   - temporary ask reply ref is one-shot
+   - temporary ask reply actor is one-shot
    - actor-backed `replyTo` uses normal `tell` semantics
 
-28. Keep `ReplyRef` as a distinct interface even though `ActorRef` extends it.
-    This keeps request/reply protocols narrower than full actor lifecycle control.
-
-29. Do not add `messageAdapter()` in this pass.
+28. Do not add `messageAdapter()` in this pass.
     It is a likely follow-up feature, not part of this refactor.
 
-30. Define what happens if `preStop` or `postStop` throws.
+29. Define what happens if `preStop` or `postStop` throws.
     Recommendation: preserve the original terminal cause if one already exists, and do not let cleanup exceptions rewrite command-failure semantics unexpectedly.
 
-31. Migrate all actor protocols/tests to the new `replyTo` model in one pass.
+30. Migrate all actor protocols/tests to the new `replyTo` model in one pass.
     No compatibility bridge; update all usages together.
 
-32. Add tests for the revised semantics.
+31. Add tests for the revised semantics.
     At minimum:
    - self-shutdown guard
    - cancellation classification
@@ -120,7 +117,7 @@ Final implementation/planning list:
    - reject/define watch during watcher shutdown
    - first-wins shutdown timeout
    - system-event priority
-   - external `ask()` via temporary reply ref
+   - external `ask()` via temporary reply actor ref
    - actor-to-actor `replyTo` flow
    - one-shot temporary reply behavior
    - accepted-but-undelivered ask failure mapping

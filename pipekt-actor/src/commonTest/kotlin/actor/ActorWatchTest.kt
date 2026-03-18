@@ -1,5 +1,13 @@
 package io.github.fpaschos.pipekt.actor
 
+import io.github.fpaschos.pipekt.fixtures.ChildCommand
+import io.github.fpaschos.pipekt.fixtures.EventRecorder
+import io.github.fpaschos.pipekt.fixtures.ForeignWatchingActor
+import io.github.fpaschos.pipekt.fixtures.MinimalActor
+import io.github.fpaschos.pipekt.fixtures.ParentActor
+import io.github.fpaschos.pipekt.fixtures.ParentCommand
+import io.github.fpaschos.pipekt.fixtures.SelfWatchingActor
+import io.github.fpaschos.pipekt.fixtures.WatchDuringShutdownActor
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.result.shouldBeSuccess

@@ -53,7 +53,7 @@ class PipelineDslRuntimeTest :
                     step<Msg, Msg>("uppercase") { msg -> Msg(msg.value.uppercase()) }
                 }.shouldBeRight()
 
-            runTest(StandardTestDispatcher()) {
+            runTest {
                 val orchestrator =
                     createPipelineOrchestrator(
                         store = store,

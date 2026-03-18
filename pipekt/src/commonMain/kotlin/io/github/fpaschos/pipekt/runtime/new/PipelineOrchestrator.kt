@@ -4,13 +4,13 @@ import io.github.fpaschos.pipekt.actor.Actor
 import io.github.fpaschos.pipekt.actor.ActorContext
 import io.github.fpaschos.pipekt.actor.ActorRef
 import io.github.fpaschos.pipekt.actor.ActorTermination
-import io.github.fpaschos.pipekt.actor.ReplyRef
 import io.github.fpaschos.pipekt.actor.TimerKey
 import io.github.fpaschos.pipekt.actor.ask
 import io.github.fpaschos.pipekt.actor.spawn
 import io.github.fpaschos.pipekt.core.KotlinxPayloadSerializer
 import io.github.fpaschos.pipekt.core.PayloadSerializer
 import io.github.fpaschos.pipekt.core.PipelineDefinition
+import io.github.fpaschos.pipekt.runtime.new.actors.LeaseReclaimer
 import io.github.fpaschos.pipekt.store.DurableStore
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlin.time.Clock
@@ -71,39 +71,66 @@ private class DefaultPipelineOrchestrator(
         definition: PipelineDefinition,
         planVersion: String,
         config: RuntimeConfig,
-    ): PipelineExecutable =
-        ref
-            .ask(30.seconds) { replyTo ->
-                OrchestratorCommand.StartPipeline(
-                    definition = definition,
-                    planVersion = planVersion,
-                    config = config,
-                    replyTo = replyTo,
+    ): PipelineExecutable {
+        val reply =
+            ref
+                .ask(30.seconds) { replyTo ->
+                    OrchestratorCommand.StartPipeline(
+                        definition = definition,
+                        planVersion = planVersion,
+                        config = config,
+                        replyTo = replyTo,
+                    )
+                }.getOrThrow()
+
+        return when (reply) {
+            is StartPipelineReply.Started -> {
+                reply.executable
+            }
+
+            is StartPipelineReply.AlreadyActive -> {
+                throw PipelineAlreadyActiveException(
+                    pipelineName = reply.pipelineName,
+                    planVersion = reply.planVersion,
                 )
-            }.getOrThrow()
+            }
+        }
+    }
 
     override suspend fun stopPipeline(
         executableId: String,
         timeout: Duration?,
     ) {
-        ref
-            .ask(30.seconds) { replyTo ->
-                OrchestratorCommand.StopPipeline(
-                    executableId = executableId,
-                    timeout = timeout,
-                    replyTo = replyTo,
-                )
-            }.getOrThrow()
+        when (
+            val reply =
+                ref
+                    .ask(30.seconds) { replyTo ->
+                        OrchestratorCommand.StopPipeline(
+                            executableId = executableId,
+                            timeout = timeout,
+                            replyTo = replyTo,
+                        )
+                    }.getOrThrow()
+        ) {
+            StopPipelineReply.Stopped -> Unit
+            is StopPipelineReply.NotFound -> throw PipelineExecutableNotFoundException(reply.executableId)
+        }
     }
 
     override suspend fun inspectPipeline(executableId: String): PipelineExecutableSnapshot? =
-        ref
-            .ask(30.seconds) { replyTo ->
-                OrchestratorCommand.InspectPipeline(
-                    executableId = executableId,
-                    replyTo = replyTo,
-                )
-            }.getOrThrow()
+        when (
+            val reply =
+                ref
+                    .ask(30.seconds) { replyTo ->
+                        OrchestratorCommand.InspectPipeline(
+                            executableId = executableId,
+                            replyTo = replyTo,
+                        )
+                    }.getOrThrow()
+        ) {
+            is InspectPipelineReply.Found -> reply.snapshot
+            InspectPipelineReply.NotFound -> null
+        }
 
     override suspend fun listActivePipelines(): List<PipelineExecutableSnapshot> =
         ref.ask(30.seconds) { replyTo -> OrchestratorCommand.ListActivePipelines(replyTo) }.getOrThrow()
@@ -142,32 +169,59 @@ private data class ActivePipeline(
     val runtimeRef: ActorRef<RuntimeCommand>,
 )
 
+private sealed interface StartPipelineReply {
+    data class Started(
+        val executable: PipelineExecutable,
+    ) : StartPipelineReply
+
+    data class AlreadyActive(
+        val pipelineName: String,
+        val planVersion: String,
+    ) : StartPipelineReply
+}
+
+private sealed interface StopPipelineReply {
+    data object Stopped : StopPipelineReply
+
+    data class NotFound(
+        val executableId: String,
+    ) : StopPipelineReply
+}
+
+private sealed interface InspectPipelineReply {
+    data class Found(
+        val snapshot: PipelineExecutableSnapshot,
+    ) : InspectPipelineReply
+
+    data object NotFound : InspectPipelineReply
+}
+
 private sealed interface OrchestratorCommand {
     data class StartPipeline(
         val definition: PipelineDefinition,
         val planVersion: String,
         val config: RuntimeConfig,
-        val replyTo: ReplyRef<PipelineExecutable>,
+        val replyTo: ActorRef<StartPipelineReply>,
     ) : OrchestratorCommand
 
     data class StopPipeline(
         val executableId: String,
         val timeout: Duration?,
-        val replyTo: ReplyRef<Unit>,
+        val replyTo: ActorRef<StopPipelineReply>,
     ) : OrchestratorCommand
 
     data class InspectPipeline(
         val executableId: String,
-        val replyTo: ReplyRef<PipelineExecutableSnapshot?>,
+        val replyTo: ActorRef<InspectPipelineReply>,
     ) : OrchestratorCommand
 
     data class ListActivePipelines(
-        val replyTo: ReplyRef<List<PipelineExecutableSnapshot>>,
+        val replyTo: ActorRef<List<PipelineExecutableSnapshot>>,
     ) : OrchestratorCommand
 
     data class StopAll(
         val timeout: Duration?,
-        val replyTo: ReplyRef<Unit>,
+        val replyTo: ActorRef<Unit>,
     ) : OrchestratorCommand
 
     data class RuntimeTerminated(
@@ -185,7 +239,7 @@ private class PipelineOrchestratorActor(
     private val serializer: PayloadSerializer,
 ) : Actor<OrchestratorCommand>() {
     private val activeExecutables = linkedMapOf<String, ActivePipeline>()
-    private var leaseReclaimerRef: ActorRef<LeaseReclaimerCommand>? = null
+    private var leaseReclaimerRef: ActorRef<LeaseReclaimer.Command>? = null
     private var leaseReclaimerConfig: RuntimeConfig? = null
 
     override suspend fun handle(
@@ -202,7 +256,12 @@ private class PipelineOrchestratorActor(
             }
 
             is OrchestratorCommand.InspectPipeline -> {
-                command.replyTo.tell(activeExecutables[command.executableId]?.snapshot)
+                command.replyTo.tell(
+                    activeExecutables[command.executableId]
+                        ?.snapshot
+                        ?.let(InspectPipelineReply::Found)
+                        ?: InspectPipelineReply.NotFound,
+                )
             }
 
             is OrchestratorCommand.ListActivePipelines -> {
@@ -248,8 +307,8 @@ private class PipelineOrchestratorActor(
                 it.snapshot.pipelineName == command.definition.name &&
                     it.snapshot.planVersion == command.planVersion
             }?.let {
-                command.replyTo.fail(
-                    PipelineAlreadyActiveException(
+                command.replyTo.tell(
+                    StartPipelineReply.AlreadyActive(
                         pipelineName = command.definition.name,
                         planVersion = command.planVersion,
                     ),
@@ -285,16 +344,23 @@ private class PipelineOrchestratorActor(
                 termination = termination,
             )
         }
-        command.replyTo.tell(DefaultPipelineExecutable(DefaultPipelineOrchestrator(ctx.self), snapshot))
+        command.replyTo.tell(
+            StartPipelineReply.Started(
+                DefaultPipelineExecutable(DefaultPipelineOrchestrator(ctx.self), snapshot),
+            ),
+        )
     }
 
     private suspend fun stopPipeline(command: OrchestratorCommand.StopPipeline) {
         val active =
             activeExecutables[command.executableId]
-                ?: throw PipelineExecutableNotFoundException(command.executableId)
+                ?: run {
+                    command.replyTo.tell(StopPipelineReply.NotFound(command.executableId))
+                    return
+                }
         active.runtimeRef.shutdown(command.timeout)
         activeExecutables.remove(command.executableId)
-        command.replyTo.tell(Unit)
+        command.replyTo.tell(StopPipelineReply.Stopped)
     }
 
     private suspend fun ensureLeaseReclaimer(
@@ -315,8 +381,8 @@ private class PipelineOrchestratorActor(
 
         leaseReclaimerRef?.shutdown()
         val leaseRef =
-            spawn<LeaseReclaimerCommand>(name = "lease-reclaimer") {
-                LeaseReclaimerActor(store = store, config = mergedConfig)
+            spawn(name = "lease-reclaimer") {
+                LeaseReclaimer(store = store, config = mergedConfig)
             }
         ctx.watch(leaseRef) { termination -> OrchestratorCommand.LeaseReclaimerTerminated(termination) }
         leaseReclaimerRef = leaseRef
@@ -434,36 +500,6 @@ private class StepWorkerActor(
             WorkerCommand.Tick -> {
                 val processed = runtime.executeStep(stepName = stepName, workerId = ctx.label)
                 ctx.timers.once(tickTimerKey, if (processed) ZERO else config.workerPollInterval, WorkerCommand.Tick)
-            }
-        }
-    }
-}
-
-private sealed interface LeaseReclaimerCommand {
-    data object Tick : LeaseReclaimerCommand
-}
-
-private class LeaseReclaimerActor(
-    private val store: DurableStore,
-    private val config: RuntimeConfig,
-) : Actor<LeaseReclaimerCommand>() {
-    private val tickTimerKey = TimerKey("lease-reclaimer-tick")
-
-    override suspend fun postStart(ctx: ActorContext<LeaseReclaimerCommand>) {
-        ctx.timers.once(tickTimerKey, config.watchdogInterval, LeaseReclaimerCommand.Tick)
-    }
-
-    override suspend fun handle(
-        ctx: ActorContext<LeaseReclaimerCommand>,
-        command: LeaseReclaimerCommand,
-    ) {
-        when (command) {
-            LeaseReclaimerCommand.Tick -> {
-                store.reclaimExpiredLeases(
-                    now = Clock.System.now(),
-                    limit = config.workerClaimLimit,
-                )
-                ctx.timers.once(tickTimerKey, config.watchdogInterval, LeaseReclaimerCommand.Tick)
             }
         }
     }

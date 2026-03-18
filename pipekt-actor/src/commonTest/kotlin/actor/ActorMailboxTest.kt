@@ -1,5 +1,12 @@
 package io.github.fpaschos.pipekt.actor
 
+import io.github.fpaschos.pipekt.fixtures.ChildCommand
+import io.github.fpaschos.pipekt.fixtures.EventRecorder
+import io.github.fpaschos.pipekt.fixtures.MinimalActor
+import io.github.fpaschos.pipekt.fixtures.ParentActor
+import io.github.fpaschos.pipekt.fixtures.ParentCommand
+import io.github.fpaschos.pipekt.fixtures.RecordingActor
+import io.github.fpaschos.pipekt.fixtures.TestCommand
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.result.shouldBeFailure
@@ -101,8 +108,15 @@ class ActorMailboxTest :
                     .tell(
                         TestCommand.Fail(
                             replyTo =
-                                object : ReplyRef<String> {
-                                    override fun tell(reply: String): Result<Unit> = Result.success(Unit)
+                                object : ActorRef<String> {
+                                    override val name: String = "test-reply"
+                                    override val label: String = "test-reply#1"
+
+                                    override fun tell(command: String): Result<Unit> = Result.success(Unit)
+
+                                    override suspend fun shutdown(timeout: kotlin.time.Duration?) {
+                                        throw UnsupportedOperationException("not used in test")
+                                    }
                                 },
                         ),
                     ).shouldBeSuccess(Unit)

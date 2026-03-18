@@ -18,7 +18,7 @@ The [`specs/`](./specs/) folder documents the runtime behavior and the implement
 At a high level, the current actor runtime is expected to satisfy these requirements:
 
 - bounded user mailbox with fail-fast `tell()`
-- typed request/reply using `replyTo: ReplyRef<T>`
+- typed request/reply using `replyTo: ActorRef<T>`
 - one-shot external `ask()` semantics
 - separate internal system queue for stop and watch events
 - cooperative, first-wins shutdown behavior

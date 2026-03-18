@@ -1,34 +1,7 @@
 package io.github.fpaschos.pipekt.actor
 
+import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CompletableDeferred
-
-/**
- * Narrow typed sink for request/reply protocols.
- *
- * Actor request/reply commands should depend on [ReplyRef] instead of a full [ActorRef] when they
- * only need to emit a response. This keeps request/reply protocols narrower than actor lifecycle
- * control.
- */
-interface ReplyRef<in Reply> {
-    /**
-     * Attempts to deliver [reply] to the receiver.
-     *
-     * Reply refs created by [ask] are one-shot: the first successful reply wins and later replies
-     * fail.
-     */
-    fun tell(reply: Reply): Result<Unit>
-
-    /**
-     * Attempts to complete the reply with a failure.
-     *
-     * The default implementation rejects failure delivery so that reply-capable APIs opt into
-     * failure semantics explicitly.
-     */
-    fun fail(cause: Throwable): Result<Unit> =
-        Result.failure(
-            UnsupportedOperationException("This reply ref does not support failure delivery."),
-        )
-}
 
 internal interface AskReplyHandle {
     fun completeFailure(cause: Throwable): Boolean
@@ -36,24 +9,27 @@ internal interface AskReplyHandle {
     fun cancel()
 }
 
-internal class DeferredReplyRef<Reply> :
-    ReplyRef<Reply>,
+private val nextAskReplyId = atomic(0L)
+
+internal class DeferredReplyActorRef<Reply : Any> :
+    ActorRef<Reply>,
     AskReplyHandle {
     private val deferred = CompletableDeferred<Reply>()
+    private val id = nextAskReplyId.incrementAndGet()
 
-    override fun tell(reply: Reply): Result<Unit> =
-        if (deferred.complete(reply)) {
+    override val name: String = "ask-reply"
+    override val label: String = "$name#$id"
+
+    override fun tell(command: Reply): Result<Unit> =
+        if (deferred.complete(command)) {
             Result.success(Unit)
         } else {
             Result.failure(IllegalStateException("Reply already completed."))
         }
 
-    override fun fail(cause: Throwable): Result<Unit> =
-        if (deferred.completeExceptionally(cause)) {
-            Result.success(Unit)
-        } else {
-            Result.failure(IllegalStateException("Reply already completed."))
-        }
+    override suspend fun shutdown(timeout: kotlin.time.Duration?) {
+        throw UnsupportedOperationException("Temporary ask reply actor refs do not support shutdown().")
+    }
 
     // Ask replies are one-shot: only the first successful reply or failure completes the request.
     override fun completeFailure(cause: Throwable): Boolean = deferred.completeExceptionally(cause)
@@ -65,4 +41,4 @@ internal class DeferredReplyRef<Reply> :
     }
 }
 
-internal fun <Reply> deferredReplyRef(): DeferredReplyRef<Reply> = DeferredReplyRef()
+internal fun <Reply : Any> deferredReplyActorRef(): DeferredReplyActorRef<Reply> = DeferredReplyActorRef()

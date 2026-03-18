@@ -1,5 +1,7 @@
 package io.github.fpaschos.pipekt.actor
 
+import io.github.fpaschos.pipekt.fixtures.MinimalActor
+import io.github.fpaschos.pipekt.fixtures.TestCommand
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.result.shouldBeFailure
@@ -15,7 +17,7 @@ import kotlin.time.Duration.Companion.seconds
 @OptIn(ExperimentalCoroutinesApi::class)
 class ActorRequestReplyTest :
     FunSpec({
-        test("typed refs support tell and ask through replyTo refs") {
+        test("typed actor refs support tell and ask through replyTo actor refs") {
             runTest {
                 val ref = spawn("tell-ask-actor") { MinimalActor() }
 
@@ -33,7 +35,7 @@ class ActorRequestReplyTest :
             }
         }
 
-        test("temporary ask reply refs are one-shot") {
+        test("temporary ask reply actor refs are one-shot") {
             runTest {
                 val ref = spawn("double-reply-actor") { MinimalActor() }
 

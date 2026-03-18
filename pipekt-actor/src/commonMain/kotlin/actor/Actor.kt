@@ -308,11 +308,9 @@ internal class ActorRuntime<Command : Any>(
             )
         }
 
-        val result = mailbox.trySend(CommandEnvelope(command = command, askReply = askReply))
-        return result.toActorResult(
-            reason = ActorUnavailableReason.ACTOR_CLOSED,
-            label = label,
-        )
+        return mailbox
+            .trySend(CommandEnvelope(command = command, askReply = askReply))
+            .toActorSendResult(label)
     }
 
     suspend fun shutdown(timeout: Duration?) {
@@ -535,7 +533,9 @@ internal class ActorRuntime<Command : Any>(
                     }
                 }
 
-                is WatchState.Terminated -> return
+                is WatchState.Terminated -> {
+                    return
+                }
             }
         }
     }
@@ -658,22 +658,25 @@ private data object OwnedActorScope :
     object Key : CoroutineContext.Key<OwnedActorScope>
 }
 
-private fun <T> ChannelResult<T>.toActorResult(
-    reason: ActorUnavailableReason,
+private fun ChannelResult<Unit>.toActorSendResult(
     label: String,
 ): Result<Unit> =
     when {
-        isSuccess -> Result.success(Unit)
-        isClosed ->
+        isSuccess -> {
+            Result.success(Unit)
+        }
+
+        isClosed -> {
             Result.failure(
                 ActorUnavailable(
-                    reason = reason,
+                    reason = ActorUnavailableReason.ACTOR_CLOSED,
                     label = label,
                     cause = exceptionOrNull(),
                 ),
             )
+        }
 
-        else ->
+        else -> {
             Result.failure(
                 ActorUnavailable(
                     reason = ActorUnavailableReason.MAILBOX_FULL,
@@ -681,6 +684,7 @@ private fun <T> ChannelResult<T>.toActorResult(
                     cause = exceptionOrNull(),
                 ),
             )
+        }
     }
 
 private fun createActorScope(

@@ -71,8 +71,9 @@ data class ActorTermination(
 /**
  * Generic typed handle to an actor.
  *
- * An [ActorRef] is the public entry point for sending commands to an actor and, when types align,
- * it can also be used directly as a [ReplyRef].
+ * An [ActorRef] is the public entry point for sending commands to an actor. Request/reply
+ * protocols also use `replyTo: ActorRef<Reply>` so actors can answer by sending a normal message
+ * back to another actor ref.
  *
  * ### Admission
  * - [tell] is non-suspending.
@@ -83,18 +84,18 @@ data class ActorTermination(
  * - [shutdown] requests cooperative actor termination and waits for completion.
  * - Actor code must not call [shutdown] on itself; use [ActorContext.stopSelf] instead.
  */
-interface ActorRef<in Command : Any> : ReplyRef<Command> {
+interface ActorRef<in Command : Any> {
     val name: String
 
     val label: String
 
     /**
-     * Attempts to enqueue [reply] for this actor.
+     * Attempts to enqueue [command] for this actor.
      *
      * Returns success only if the actor is currently running and its mailbox can accept the
      * command.
      */
-    override fun tell(reply: Command): Result<Unit>
+    fun tell(command: Command): Result<Unit>
 
     /**
      * Requests cooperative shutdown and waits for termination.
@@ -105,13 +106,25 @@ interface ActorRef<in Command : Any> : ReplyRef<Command> {
     suspend fun shutdown(timeout: Duration? = null)
 }
 
+internal interface AskCapableActorRef<in Command : Any> : ActorRef<Command> {
+    fun sendForAsk(
+        command: Command,
+        askReply: Any,
+    ): Result<Unit>
+}
+
 @ConsistentCopyVisibility
 data class DefaultActorRef<Command : Any> internal constructor(
     override val name: String,
     override val label: String,
     internal val runtime: ActorRuntime<Command>,
-) : ActorRef<Command> {
+) : AskCapableActorRef<Command> {
     override fun tell(command: Command): Result<Unit> = runtime.send(command)
+
+    override fun sendForAsk(
+        command: Command,
+        askReply: Any,
+    ): Result<Unit> = runtime.send(command, askReply as AskReplyHandle)
 
     override suspend fun shutdown(timeout: Duration?) {
         runtime.shutdown(timeout)
@@ -121,7 +134,7 @@ data class DefaultActorRef<Command : Any> internal constructor(
 /**
  * Universal request/reply helper built on reply-bearing commands.
  *
- * This helper creates a temporary one-shot [ReplyRef], builds a command using [block], sends it,
+ * This helper creates a temporary one-shot [ActorRef], builds a command using [block], sends it,
  * and then waits for the first reply until [timeout] elapses.
  *
  * Failure mapping:
@@ -132,18 +145,17 @@ data class DefaultActorRef<Command : Any> internal constructor(
  *
  * ### `block` behavior
  * - Invoked synchronously in the caller's coroutine before enqueue.
- * - Must construct exactly one command that embeds the provided reply ref.
+ * - Must construct exactly one command that embeds the provided reply actor ref.
  */
-suspend fun <Command : Any, Reply> ActorRef<Command>.ask(
+suspend fun <Command : Any, Reply : Any> ActorRef<Command>.ask(
     timeout: Duration,
-    block: (ReplyRef<Reply>) -> Command,
+    block: (ActorRef<Reply>) -> Command,
 ): Result<Reply> {
-    val reply = deferredReplyRef<Reply>()
+    val reply = deferredReplyActorRef<Reply>()
     val command = block(reply)
     val enqueue =
-        (this as? DefaultActorRef<Command>)
-            ?.runtime
-            ?.send(command, reply)
+        (this as? AskCapableActorRef<Command>)
+            ?.sendForAsk(command, reply)
             ?: tell(command)
     if (enqueue.isFailure) {
         return Result.failure(enqueue.exceptionOrNull()!!)

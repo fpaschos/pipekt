@@ -1,5 +1,6 @@
-package io.github.fpaschos.pipekt.actor
+package io.github.fpaschos.pipekt.fixtures
 
+import io.github.fpaschos.pipekt.actor.ActorRef
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.channels.Channel
@@ -26,21 +27,21 @@ sealed interface TestCommand {
 
     data class Ping(
         val value: String,
-        val replyTo: ReplyRef<String>,
+        val replyTo: ActorRef<String>,
     ) : TestCommand
 
     data class Snapshot(
-        val replyTo: ReplyRef<List<String>>,
+        val replyTo: ActorRef<List<String>>,
     ) : TestCommand
 
     data class Fail(
-        val replyTo: ReplyRef<String>,
+        val replyTo: ActorRef<String>,
     ) : TestCommand
 
     data class SlowPing(
         val value: String,
         val gate: CompletableDeferred<Unit>,
-        val replyTo: ReplyRef<String>,
+        val replyTo: ActorRef<String>,
     ) : TestCommand
 
     data class Block(
@@ -48,21 +49,21 @@ sealed interface TestCommand {
     ) : TestCommand
 
     data class LoopName(
-        val replyTo: ReplyRef<String?>,
+        val replyTo: ActorRef<String>,
     ) : TestCommand
 
     data class DoubleReply(
-        val replyTo: ReplyRef<String>,
+        val replyTo: ActorRef<String>,
     ) : TestCommand
 
     data object StopSelf : TestCommand
 
     data class SelfShutdown(
-        val replyTo: ReplyRef<String>,
+        val replyTo: ActorRef<String>,
     ) : TestCommand
 
     data class CancelCurrent(
-        val replyTo: ReplyRef<String>,
+        val replyTo: ActorRef<String>,
     ) : TestCommand
 }
 
@@ -70,17 +71,17 @@ class MinimalActor(
     private val events: EventRecorder = EventRecorder(),
     private val startupGate: CompletableDeferred<Unit>? = null,
     capacity: Int = Channel.BUFFERED,
-) : Actor<TestCommand>(capacity) {
+) : io.github.fpaschos.pipekt.actor.Actor<TestCommand>(capacity) {
     private val recorded = mutableListOf<String>()
 
-    override suspend fun postStart(ctx: ActorContext<TestCommand>) {
+    override suspend fun postStart(ctx: io.github.fpaschos.pipekt.actor.ActorContext<TestCommand>) {
         events.record("postStart:begin")
         startupGate?.await()
         events.record("postStart:end")
     }
 
     override suspend fun handle(
-        ctx: ActorContext<TestCommand>,
+        ctx: io.github.fpaschos.pipekt.actor.ActorContext<TestCommand>,
         command: TestCommand,
     ) {
         when (command) {
@@ -118,7 +119,7 @@ class MinimalActor(
             }
 
             is TestCommand.LoopName -> {
-                command.replyTo.tell(currentCoroutineContext()[CoroutineName]?.name)
+                command.replyTo.tell(currentCoroutineContext()[CoroutineName]?.name ?: "missing")
             }
 
             is TestCommand.DoubleReply -> {
@@ -143,20 +144,20 @@ class MinimalActor(
         }
     }
 
-    override suspend fun preStop(ctx: ActorContext<TestCommand>) {
+    override suspend fun preStop(ctx: io.github.fpaschos.pipekt.actor.ActorContext<TestCommand>) {
         events.record("preStop")
     }
 
-    override suspend fun postStop(ctx: ActorContext<TestCommand>) {
+    override suspend fun postStop(ctx: io.github.fpaschos.pipekt.actor.ActorContext<TestCommand>) {
         events.record("postStop")
     }
 }
 
 class RecordingActor(
     private val undelivered: MutableList<String>,
-) : Actor<TestCommand>(Channel.BUFFERED) {
+) : io.github.fpaschos.pipekt.actor.Actor<TestCommand>(Channel.BUFFERED) {
     override suspend fun handle(
-        ctx: ActorContext<TestCommand>,
+        ctx: io.github.fpaschos.pipekt.actor.ActorContext<TestCommand>,
         command: TestCommand,
     ) {
         when (command) {
@@ -181,7 +182,7 @@ class RecordingActor(
             is TestCommand.Block -> {}
 
             is TestCommand.LoopName -> {
-                command.replyTo.tell(null)
+                command.replyTo.tell("missing")
             }
 
             is TestCommand.DoubleReply -> {
@@ -204,9 +205,9 @@ class RecordingActor(
     }
 
     override fun onUndeliveredCommand(
-        ctx: ActorContext<TestCommand>,
+        ctx: io.github.fpaschos.pipekt.actor.ActorContext<TestCommand>,
         command: TestCommand,
-        reason: ActorUnavailableReason,
+        reason: io.github.fpaschos.pipekt.actor.ActorUnavailableReason,
     ) {
         val label =
             when (command) {
@@ -229,11 +230,11 @@ class RecordingActor(
 
 class FailingStartActor(
     private val startupFailure: Throwable,
-) : Actor<TestCommand>(Channel.BUFFERED) {
-    override suspend fun postStart(ctx: ActorContext<TestCommand>): Unit = throw startupFailure
+) : io.github.fpaschos.pipekt.actor.Actor<TestCommand>(Channel.BUFFERED) {
+    override suspend fun postStart(ctx: io.github.fpaschos.pipekt.actor.ActorContext<TestCommand>): Unit = throw startupFailure
 
     override suspend fun handle(
-        ctx: ActorContext<TestCommand>,
+        ctx: io.github.fpaschos.pipekt.actor.ActorContext<TestCommand>,
         command: TestCommand,
     ) = Unit
 }
@@ -244,37 +245,37 @@ sealed interface ChildCommand {
     data object Capture : ChildCommand
 
     data class ReplyParent(
-        val replyTo: ReplyRef<ParentCommand>,
+        val replyTo: ActorRef<ParentCommand>,
     ) : ChildCommand
 }
 
 sealed interface ParentCommand {
     data class SnapshotEvents(
-        val replyTo: ReplyRef<List<String>>,
+        val replyTo: ActorRef<List<String>>,
     ) : ParentCommand
 
     data class StopChild(
-        val replyTo: ReplyRef<Unit>,
+        val replyTo: ActorRef<Unit>,
     ) : ParentCommand
 
     data class FailChild(
-        val replyTo: ReplyRef<Unit>,
+        val replyTo: ActorRef<Unit>,
     ) : ParentCommand
 
     data class ChildObserved(
-        val termination: ActorTermination,
+        val termination: io.github.fpaschos.pipekt.actor.ActorTermination,
     ) : ParentCommand
 
     data class WatchStopped(
-        val replyTo: ReplyRef<Unit>,
+        val replyTo: ActorRef<Unit>,
     ) : ParentCommand
 
     data class WatchActive(
-        val replyTo: ReplyRef<Unit>,
+        val replyTo: ActorRef<Unit>,
     ) : ParentCommand
 
     data class TriggerChildReply(
-        val replyTo: ReplyRef<Unit>,
+        val replyTo: ActorRef<Unit>,
     ) : ParentCommand
 
     data class Block(
@@ -286,9 +287,9 @@ sealed interface ParentCommand {
 
 class ChildActor(
     private val events: EventRecorder,
-) : Actor<ChildCommand>(Channel.BUFFERED) {
+) : io.github.fpaschos.pipekt.actor.Actor<ChildCommand>(Channel.BUFFERED) {
     override suspend fun handle(
-        ctx: ActorContext<ChildCommand>,
+        ctx: io.github.fpaschos.pipekt.actor.ActorContext<ChildCommand>,
         command: ChildCommand,
     ) {
         when (command) {
@@ -298,7 +299,7 @@ class ChildActor(
         }
     }
 
-    override suspend fun postStop(ctx: ActorContext<ChildCommand>) {
+    override suspend fun postStop(ctx: io.github.fpaschos.pipekt.actor.ActorContext<ChildCommand>) {
         events.record("child:postStop")
     }
 }
@@ -308,18 +309,20 @@ class ParentActor(
     private val childRef: CompletableDeferred<ActorRef<ChildCommand>>? = null,
     private val selfRef: CompletableDeferred<ActorRef<ParentCommand>>? = null,
     capacity: Int = Channel.BUFFERED,
-) : Actor<ParentCommand>(capacity) {
+) : io.github.fpaschos.pipekt.actor.Actor<ParentCommand>(capacity) {
     private lateinit var child: ActorRef<ChildCommand>
 
-    override suspend fun postStart(ctx: ActorContext<ParentCommand>) {
+    override suspend fun postStart(ctx: io.github.fpaschos.pipekt.actor.ActorContext<ParentCommand>) {
         selfRef?.complete(ctx.self)
-        child = spawn(name = "watched-child") { ChildActor(events) }
+        child =
+            _root_ide_package_.io.github.fpaschos.pipekt.actor
+                .spawn(name = "watched-child") { ChildActor(events) }
         childRef?.complete(child)
         ctx.watch(child) { ParentCommand.ChildObserved(it) }
     }
 
     override suspend fun handle(
-        ctx: ActorContext<ParentCommand>,
+        ctx: io.github.fpaschos.pipekt.actor.ActorContext<ParentCommand>,
         command: ParentCommand,
     ) {
         when (command) {
@@ -369,7 +372,7 @@ class ParentActor(
         }
     }
 
-    override suspend fun preStop(ctx: ActorContext<ParentCommand>) {
+    override suspend fun preStop(ctx: io.github.fpaschos.pipekt.actor.ActorContext<ParentCommand>) {
         if (::child.isInitialized) {
             child.shutdown()
         }
@@ -378,37 +381,37 @@ class ParentActor(
 
 class SelfCapturingActor(
     private val selfRef: CompletableDeferred<ActorRef<TestCommand>>,
-) : Actor<TestCommand>() {
-    override suspend fun postStart(ctx: ActorContext<TestCommand>) {
+) : io.github.fpaschos.pipekt.actor.Actor<TestCommand>() {
+    override suspend fun postStart(ctx: io.github.fpaschos.pipekt.actor.ActorContext<TestCommand>) {
         selfRef.complete(ctx.self)
     }
 
     override suspend fun handle(
-        ctx: ActorContext<TestCommand>,
+        ctx: io.github.fpaschos.pipekt.actor.ActorContext<TestCommand>,
         command: TestCommand,
     ) = Unit
 }
 
 class ForeignWatchingActor(
     private val foreignRef: ActorRef<Any>,
-) : Actor<TestCommand>() {
-    override suspend fun postStart(ctx: ActorContext<TestCommand>) {
+) : io.github.fpaschos.pipekt.actor.Actor<TestCommand>() {
+    override suspend fun postStart(ctx: io.github.fpaschos.pipekt.actor.ActorContext<TestCommand>) {
         ctx.watch(foreignRef) { TestCommand.Record(it.actorLabel) }
     }
 
     override suspend fun handle(
-        ctx: ActorContext<TestCommand>,
+        ctx: io.github.fpaschos.pipekt.actor.ActorContext<TestCommand>,
         command: TestCommand,
     ) = Unit
 }
 
-class SelfWatchingActor : Actor<TestCommand>() {
-    override suspend fun postStart(ctx: ActorContext<TestCommand>) {
+class SelfWatchingActor : io.github.fpaschos.pipekt.actor.Actor<TestCommand>() {
+    override suspend fun postStart(ctx: io.github.fpaschos.pipekt.actor.ActorContext<TestCommand>) {
         ctx.watch(ctx.self) { TestCommand.Record(it.actorLabel) }
     }
 
     override suspend fun handle(
-        ctx: ActorContext<TestCommand>,
+        ctx: io.github.fpaschos.pipekt.actor.ActorContext<TestCommand>,
         command: TestCommand,
     ) = Unit
 }
@@ -416,15 +419,15 @@ class SelfWatchingActor : Actor<TestCommand>() {
 class WatchDuringShutdownActor(
     private val target: ActorRef<TestCommand>,
     private val failure: CompletableDeferred<Throwable>,
-) : Actor<TestCommand>() {
-    override suspend fun preStop(ctx: ActorContext<TestCommand>) {
+) : io.github.fpaschos.pipekt.actor.Actor<TestCommand>() {
+    override suspend fun preStop(ctx: io.github.fpaschos.pipekt.actor.ActorContext<TestCommand>) {
         runCatching {
             ctx.watch(target) { TestCommand.Record(it.actorLabel) }
         }.exceptionOrNull()?.let { failure.complete(it) }
     }
 
     override suspend fun handle(
-        ctx: ActorContext<TestCommand>,
+        ctx: io.github.fpaschos.pipekt.actor.ActorContext<TestCommand>,
         command: TestCommand,
     ) = Unit
 }
@@ -432,9 +435,9 @@ class WatchDuringShutdownActor(
 class CancellationCleanupActor(
     private val events: EventRecorder,
     private val gate: CompletableDeferred<Unit>,
-) : Actor<TestCommand>() {
+) : io.github.fpaschos.pipekt.actor.Actor<TestCommand>() {
     override suspend fun handle(
-        ctx: ActorContext<TestCommand>,
+        ctx: io.github.fpaschos.pipekt.actor.ActorContext<TestCommand>,
         command: TestCommand,
     ) {
         when (command) {
@@ -443,7 +446,7 @@ class CancellationCleanupActor(
         }
     }
 
-    override suspend fun preStop(ctx: ActorContext<TestCommand>) {
+    override suspend fun preStop(ctx: io.github.fpaschos.pipekt.actor.ActorContext<TestCommand>) {
         events.record("preStop:begin")
         withTimeout(1.seconds) {
             delay(10.milliseconds)
@@ -451,7 +454,7 @@ class CancellationCleanupActor(
         events.record("preStop:end")
     }
 
-    override suspend fun postStop(ctx: ActorContext<TestCommand>) {
+    override suspend fun postStop(ctx: io.github.fpaschos.pipekt.actor.ActorContext<TestCommand>) {
         events.record("postStop:begin")
         withTimeout(1.seconds) {
             delay(10.milliseconds)
@@ -465,9 +468,9 @@ class FailingTeardownActor(
     private val gate: CompletableDeferred<Unit>,
     private val failPreStop: Boolean = false,
     private val failPostStop: Boolean = false,
-) : Actor<TestCommand>() {
+) : io.github.fpaschos.pipekt.actor.Actor<TestCommand>() {
     override suspend fun handle(
-        ctx: ActorContext<TestCommand>,
+        ctx: io.github.fpaschos.pipekt.actor.ActorContext<TestCommand>,
         command: TestCommand,
     ) {
         when (command) {
@@ -477,14 +480,14 @@ class FailingTeardownActor(
         }
     }
 
-    override suspend fun preStop(ctx: ActorContext<TestCommand>) {
+    override suspend fun preStop(ctx: io.github.fpaschos.pipekt.actor.ActorContext<TestCommand>) {
         events.record("preStop")
         if (failPreStop) {
             error("preStop-boom")
         }
     }
 
-    override suspend fun postStop(ctx: ActorContext<TestCommand>) {
+    override suspend fun postStop(ctx: io.github.fpaschos.pipekt.actor.ActorContext<TestCommand>) {
         events.record("postStop")
         if (failPostStop) {
             error("postStop-boom")
