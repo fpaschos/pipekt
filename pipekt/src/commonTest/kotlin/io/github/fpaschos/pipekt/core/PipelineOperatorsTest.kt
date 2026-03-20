@@ -15,10 +15,10 @@ import kotlin.reflect.typeOf
  * **Contract and behavior coverage:**
  * - [StepDef]: retryPolicy preserved (maxAttempts, backoffMs); inputType captured from the
  *   preceding operator's output type; outputType captured via reified inference from the lambda.
- * - [FilterDef]: filteredReason default (BELOW_THRESHOLD) and override (e.g. DUPLICATE); inputType
+ * - [FilterDef]: filteredReason default (BELOW_THRESHOLD) and override (e g DUPLICATE); inputType
  *   captured from the current flowing output type.
  * - Operator order and source preservation in the built definition.
- * - Full pipeline with filter + step builds and retains correct operator list.
+ * - Full pipeline with filter and step builds and retains the correct operator list.
  */
 class PipelineOperatorsTest :
     FunSpec({

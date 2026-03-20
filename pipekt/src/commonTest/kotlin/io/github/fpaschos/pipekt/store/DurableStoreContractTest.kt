@@ -12,7 +12,7 @@ import kotlin.time.Instant
  * Contract coverage for the [DurableStore] SPI surface.
  *
  * This test uses a minimal in-memory stub implementing every method from the
- * "Durable Store" contract in `plans/streams-contracts-v1.md`, and invokes
+ * "Durable Store" contract in `specs/streams-contracts-v1.md`, and invokes
  * each one once to verify that the interface is complete, callable, and
  * returns values of the expected types without throwing.
  *

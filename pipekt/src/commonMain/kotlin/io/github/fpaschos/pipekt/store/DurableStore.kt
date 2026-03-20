@@ -15,7 +15,7 @@ import kotlin.time.Instant
  * callers do not supply `now`. The only exception is [reclaimExpiredLeases], where the caller
  * provides the cutoff instant so the runtime can control when expiry is evaluated.
  *
- * See `plans/streams-contracts-v1.md` (Store Contracts) and `plans/streams-delivery-phases.md` (Phase 1B).
+ * See `specs/streams-contracts-v1.md` (Store Contracts) and `specs/streams-delivery-phases.md` (Phase 1B).
  */
 interface DurableStore {
     /**

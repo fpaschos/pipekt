@@ -10,7 +10,7 @@ import kotlin.time.Instant
  * Contract coverage for [RunRecord] as a persistent entity.
  *
  * These tests validate the "RunRecord minimum fields" contract from
- * `plans/streams-contracts-v1.md`: every record must carry a run id, pipeline
+ * `specs/streams-contracts-v1.md`: every record must carry a run id, pipeline
  * name, plan version, status, and creation / update timestamps, and expose
  * them as immutable value-type fields.
  */

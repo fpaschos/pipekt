@@ -6,7 +6,7 @@
 
 **Scope:** This document defines actor boundaries, ownership, and terminology only. It does not define the full execution algorithm, storage schema, or worker internals.
 
-**Related:** [minimal-actors.md](/Users/fpaschos/Dev/pipekt/plans/minimal-actors.md), [streams-delivery-phases.md](/Users/fpaschos/Dev/pipekt/plans/streams-delivery-phases.md), [streams-delivery-additions.md](/Users/fpaschos/Dev/pipekt/plans/streams-delivery-additions.md), [pipeline-implementation-v2.md](/Users/fpaschos/Dev/pipekt/plans/pipeline-implementation-v2.md)
+**Related:** [streams-delivery-phases.md](../../../../../../../../../specs/streams-delivery-phases.md), [streams-technical-requirements.md](../../../../../../../../../specs/streams-technical-requirements.md), [streams-phase-2-fix-plan.md](../../../../../../../../../specs/streams-phase-2-fix-plan.md)
 
 ---
 

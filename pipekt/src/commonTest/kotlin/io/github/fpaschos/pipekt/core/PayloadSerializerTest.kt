@@ -8,7 +8,7 @@ import kotlin.reflect.typeOf
 /**
  * Tests for [PayloadSerializer] and its default implementation [KotlinxPayloadSerializer].
  *
- * **Contract and behavior coverage (backed by plans/streams-contracts-v1.md — PayloadSerializer):**
+ * **Contract and behavior coverage (backed by specs/streams-contracts-v1.md - PayloadSerializer):**
  * - Round trip: serialize then deserialize returns an equal value for a @Serializable data class.
  * - Null-field round trip: nullable properties survive serialize/deserialize as null.
  * - ignoreUnknownKeys: JSON with extra fields does not throw on deserialization (schema evolution safety).
