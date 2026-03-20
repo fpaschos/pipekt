@@ -20,6 +20,8 @@ out/
 ### Kotlin ###
 .kotlin
 
+### Junie
+.junie
 ### Eclipse ###
 .apt_generated
 .classpath
