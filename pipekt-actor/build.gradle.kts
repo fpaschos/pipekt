@@ -26,6 +26,7 @@ kotlin {
             implementation(libs.bundles.kotlinx.serialization)
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.atomicfu)
+            implementation(libs.log4k)
         }
         commonTest.dependencies {
             implementation(libs.kotest.framework.engine)

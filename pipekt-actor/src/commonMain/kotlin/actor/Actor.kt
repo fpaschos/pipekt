@@ -211,11 +211,9 @@ internal class ActorRuntime<Command : Any>(
         selfRef = ref
     }
 
-    fun canRegisterWatches(): Boolean =
-        lifecycle.value != ActorLifecycle.SHUTTING_DOWN && lifecycle.value != ActorLifecycle.SHUTDOWN
+    fun canRegisterWatches(): Boolean = lifecycle.value != ActorLifecycle.SHUTTING_DOWN && lifecycle.value != ActorLifecycle.SHUTDOWN
 
-    fun canScheduleTimers(): Boolean =
-        lifecycle.value != ActorLifecycle.SHUTTING_DOWN && lifecycle.value != ActorLifecycle.SHUTDOWN
+    fun canScheduleTimers(): Boolean = lifecycle.value != ActorLifecycle.SHUTTING_DOWN && lifecycle.value != ActorLifecycle.SHUTDOWN
 
     fun start(actor: Actor<Command>) {
         check(!::loopJob.isInitialized) { "Actor runtime for $label already started." }
@@ -232,6 +230,7 @@ internal class ActorRuntime<Command : Any>(
                         lifecycle.value = ActorLifecycle.SHUTTING_DOWN
                         val cause = CancellationException("$label was stopped during startup")
                         terminalCause.compareAndSet(null, cause)
+                        ActorLogger.startupFailed(label = label, cause = cause)
                         notifyStartFail(cause)
                         cancelAllActiveTimers()
                         mailbox.close()
@@ -240,6 +239,7 @@ internal class ActorRuntime<Command : Any>(
                         keepRunning = false
                     } else {
                         lifecycle.value = ActorLifecycle.RUNNING
+                        ActorLogger.started(label = label)
                         notifyStart()
                     }
 
@@ -273,6 +273,9 @@ internal class ActorRuntime<Command : Any>(
                     lifecycle.value = ActorLifecycle.SHUTTING_DOWN
                     cancelAllActiveTimers()
                     mailbox.close(ce)
+                    if (!started.isCompleted) {
+                        ActorLogger.startupFailed(label = label, cause = ce)
+                    }
                     notifyStartFail(ce)
                     runPreStop(actor, ctx)
                     dropPendingCommands(actor, ctx)
@@ -282,6 +285,9 @@ internal class ActorRuntime<Command : Any>(
                     lifecycle.value = ActorLifecycle.SHUTTING_DOWN
                     cancelAllActiveTimers()
                     mailbox.close(t)
+                    if (!started.isCompleted) {
+                        ActorLogger.startupFailed(label = label, cause = t)
+                    }
                     notifyStartFail(t)
                     runPreStop(actor, ctx)
                     dropPendingCommands(actor, ctx)
@@ -290,6 +296,7 @@ internal class ActorRuntime<Command : Any>(
                     try {
                         runPostStop(actor, ctx)
                     } finally {
+                        ActorLogger.stopped(label = label, cause = terminalCause.value)
                         publishTermination()
                         notifyTermination()
                         systemQueue.close()
@@ -312,9 +319,11 @@ internal class ActorRuntime<Command : Any>(
             )
         }
 
-        return mailbox
-            .trySend(CommandEnvelope(command = command, askReply = askReply))
-            .toActorSendResult(label)
+        val sendResult = mailbox.trySend(CommandEnvelope(command = command, askReply = askReply))
+        if (sendResult.isSuccess) {
+            return Result.success(Unit)
+        }
+        return sendResult.toActorSendResult(label)
     }
 
     suspend fun shutdown(timeout: Duration?) {
@@ -331,6 +340,7 @@ internal class ActorRuntime<Command : Any>(
             return
         }
         if (stopRequest.compareAndSet(UNSET_STOP_TIMEOUT, timeout)) {
+            ActorLogger.stopRequested(label = label, timeout = timeout)
             systemQueue.trySend(SystemEvent.Stop(timeout))
         }
     }
@@ -439,6 +449,7 @@ internal class ActorRuntime<Command : Any>(
             throw ce
         } catch (t: Throwable) {
             terminalCause.compareAndSet(null, t)
+            ActorLogger.commandFailed(label = label, cause = t)
             actor.onCommandFailure(ctx, envelope.command, t)
             envelope.askReply?.completeFailure(ActorCommandFailed(ctx.label, t))
             mailbox.close(t)
@@ -462,7 +473,7 @@ internal class ActorRuntime<Command : Any>(
         ctx: ActorContext<Command>,
     ) {
         while (true) {
-            val envelope = mailbox.tryReceive().getOrNull() ?: return
+            val envelope = mailbox.tryReceive().getOrNull() ?: break
             actor.onUndeliveredCommand(ctx, envelope.command, ActorUnavailableReason.NOT_DELIVERED)
             envelope.askReply?.completeFailure(
                 ActorUnavailable(
@@ -662,9 +673,7 @@ private data object OwnedActorScope :
     object Key : CoroutineContext.Key<OwnedActorScope>
 }
 
-private fun ChannelResult<Unit>.toActorSendResult(
-    label: String,
-): Result<Unit> =
+private fun ChannelResult<Unit>.toActorSendResult(label: String): Result<Unit> =
     when {
         isSuccess -> {
             Result.success(Unit)

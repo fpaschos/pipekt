@@ -10,6 +10,7 @@ kotlinx-serialization = "1.10.0"
 kotest                = "6.0.4"
 ksp                   = "2.3.6"
 rabbitmq-amqp         = "5.25.0"
+log4k                 = "1.4.2"
 
 [libraries]
 arrow-core                     = { module = "io.arrow-kt:arrow-core",                             version.ref = "arrow" }
@@ -26,6 +27,7 @@ kotest-runner-junit5           = { module = "io.kotest:kotest-runner-junit5",   
 kotest-assertions-arrow        = { module = "io.kotest:kotest-assertions-arrow",                  version.ref = "kotest" }
 kotest-symbol-processor        = { module = "io.kotest:kotest-framework-symbol-processor",         version.ref = "kotest" }
 rabbitmq-amqp-client           = { module = "com.rabbitmq:amqp-client",                             version.ref = "rabbitmq-amqp" }
+log4k                          = { module = "io.github.smyrgeorge:log4k",                           version.ref = "log4k" }
 
 [bundles]
 arrow                 = ["arrow-core", "arrow-fx", "arrow-resilience"]

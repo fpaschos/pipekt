@@ -4,6 +4,12 @@
 
 The module targets the same KMP setup as the rest of the project and is intended to hold the reusable concurrency/runtime layer rather than application-specific actor protocols.
 
+## Monitoring
+
+`pipekt-actor` now emits internal actor lifecycle logs through `log4k`.
+
+The runtime logs actor start, stop requests, shutdown, startup failures, and command failures. Normal lifecycle events are emitted at `DEBUG`; startup and command failures are emitted at `ERROR`.
+
 ## Specs
 
 The [`specs/`](./specs/) folder documents the runtime behavior and the implementation constraints for this module.
