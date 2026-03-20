@@ -58,14 +58,9 @@ internal class ActorRuntime<Command : Any>(
     private val activeTimers = mutableMapOf<TimerKey, ActiveTimer>()
     private val nextTimerGeneration = mutableMapOf<TimerKey, Long>()
 
-    private lateinit var selfRef: DefaultActorRef<Command>
+    internal val ref: DefaultActorRef<Command> = DefaultActorRef(name = name, label = label, runtime = this)
     internal lateinit var loopJob: Job
         private set
-
-    fun attachRef(ref: DefaultActorRef<Command>) {
-        check(!::selfRef.isInitialized) { "Actor runtime for $label already has a ref." }
-        selfRef = ref
-    }
 
     fun canRegisterWatches(): Boolean = lifecycle.value != ActorLifecycle.SHUTTING_DOWN && lifecycle.value != ActorLifecycle.SHUTDOWN
 
@@ -73,7 +68,7 @@ internal class ActorRuntime<Command : Any>(
 
     fun start(actor: Actor<Command>) {
         check(!::loopJob.isInitialized) { "Actor runtime for $label already started." }
-        val ctx = DefaultActorContext(name = name, label = label, self = selfRef, runtime = this)
+        val ctx = DefaultActorContext(name = name, label = label, self = ref, runtime = this)
 
         loopJob =
             scope.launch(CoroutineName(label) + ActorLoopContext(this@ActorRuntime)) {

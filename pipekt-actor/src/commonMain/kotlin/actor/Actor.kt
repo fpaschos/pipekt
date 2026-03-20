@@ -168,9 +168,7 @@ suspend fun <Command : Any> spawn(
     val label = "$name#$id"
     val runtime =
         ActorRuntime(name = name, label = label, parentScope = parentScope, dispatcher = dispatcher, actor = actor)
-    val ref = DefaultActorRef(name = name, label = label, runtime = runtime)
-    runtime.attachRef(ref)
     runtime.start(actor)
     runtime.awaitStarted()
-    return ref
+    return runtime.ref
 }
