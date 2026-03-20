@@ -55,10 +55,9 @@ internal class ActorRuntime<Command : Any>(
     private val stopRequest = atomic<Any?>(UNSET_STOP_TIMEOUT)
     private val preStopExecuted = atomic(false)
 
-    // Timer generations make replacement and cancellation stronger than plain job cancellation:
-    // even if an old timer already enqueued a fire event, stale generations are dropped later.
-    private val activeTimers = mutableMapOf<TimerKey, ActiveTimer>()
-    private val nextTimerGeneration = mutableMapOf<TimerKey, Long>()
+    // Timer slots are actor-loop-confined runtime state. Each slot keeps the next generation
+    // counter for a key plus the currently scheduled timer, if any.
+    private val timerSlots = mutableMapOf<TimerKey, TimerSlot>()
 
     internal val ref: DefaultActorRef<Command> = DefaultActorRef(name = name, label = label, runtime = this)
     internal lateinit var loopJob: Job
@@ -222,19 +221,7 @@ internal class ActorRuntime<Command : Any>(
                 true
             }
 
-            is SystemEvent.TimerFired -> {
-                val timer = activeTimers[event.key] ?: return true
-                // Timer replacement/cancellation is linearized by generation. A queued fire from an
-                // older timer instance is ignored here even if its coroutine managed to enqueue it.
-                if (timer.generation != event.generation) {
-                    return true
-                }
-                if (timer.mode == TimerMode.Once) {
-                    activeTimers.remove(event.key)
-                }
-                handleCommand(actor, ctx, CommandEnvelope(event.command))
-                true
-            }
+            is SystemEvent.TimerFired -> handleTimerFired(actor, ctx, event)
         }
 
     private suspend fun handleCommand(
@@ -376,9 +363,9 @@ internal class ActorRuntime<Command : Any>(
      * `mailboxCause` is only used on abort/failure paths where mailbox closure should retain the
      * triggering exception. Cooperative stop closes the mailbox without a cause.
      */
-    private fun beginShutdown(mailboxCause: Throwable?) {
+    private suspend fun beginShutdown(mailboxCause: Throwable?) {
         lifecycle.value = ActorLifecycle.SHUTTING_DOWN
-        cancelAllActiveTimers()
+        cancelAllTrackedTimers()
         if (mailboxCause == null) {
             mailbox.close()
         } else {
@@ -466,48 +453,23 @@ internal class ActorRuntime<Command : Any>(
         command: Command,
         mode: TimerMode,
     ) {
-        guardActorLoop()
         check(canScheduleTimers()) { "Actor $label cannot schedule timers while shutting down." }
         require(timerDelay >= Duration.ZERO) { "Timer delay must be non-negative." }
 
-        val generation = (nextTimerGeneration[key] ?: 0L) + 1L
-        nextTimerGeneration[key] = generation
-        activeTimers.remove(key)?.job?.cancel()
-        activeTimers[key] =
-            ActiveTimer(
-                generation = generation,
-                mode = mode,
-                job =
-                    if (mode == TimerMode.Once && timerDelay == Duration.ZERO) {
-                        // Zero-delay still routes through the internal timer queue instead of
-                        // self.tell(). That keeps startup-time scheduling valid before RUNNING and
-                        // preserves stale-generation suppression.
-                        scope.launch {
-                            enqueueTimerFire(key = key, generation = generation, command = command)
-                        }
-                    } else {
-                        launchTimerJob(
-                            key = key,
-                            generation = generation,
-                            timerDelay = timerDelay,
-                            command = command,
-                            mode = mode,
-                        )
-                    },
-            )
+        replaceTimer(
+            key = key,
+            timerDelay = timerDelay,
+            command = command,
+            mode = mode,
+        )
     }
 
     suspend fun cancelTimer(key: TimerKey): Boolean {
-        guardActorLoop()
-        return activeTimers.remove(key)?.job?.let { job ->
-            job.cancel()
-            true
-        } ?: false
+        return cancelTrackedTimer(key)
     }
 
     suspend fun cancelAllTimers() {
-        guardActorLoop()
-        cancelAllActiveTimers()
+        cancelAllTrackedTimers()
     }
 
     private suspend fun guardActorLoop() {
@@ -516,12 +478,107 @@ internal class ActorRuntime<Command : Any>(
         }
     }
 
-    private fun cancelAllActiveTimers() {
+    /**
+     * Replaces the timer for [key] and advances that key's generation counter.
+     *
+     * The registry is actor-loop-confined. Timer jobs never mutate it directly; they only enqueue
+     * fire events back to the actor loop where generations are checked again.
+     */
+    private suspend fun replaceTimer(
+        key: TimerKey,
+        timerDelay: Duration,
+        command: Command,
+        mode: TimerMode,
+    ) {
+        guardActorLoop()
+
+        val slot = timerSlots[key] ?: TimerSlot()
+        val generation = slot.nextGeneration + 1L
+        slot.scheduled?.job?.cancel()
+        timerSlots[key] =
+            TimerSlot(
+                nextGeneration = generation,
+                scheduled =
+                    ScheduledTimer(
+                        generation = generation,
+                        mode = mode,
+                        job = createTimerJob(key, generation, timerDelay, command, mode),
+                    ),
+            )
+    }
+
+    /**
+     * Cancels the tracked timer for [key] while preserving the next generation counter for future
+     * schedules of the same logical timer key.
+     */
+    private suspend fun cancelTrackedTimer(key: TimerKey): Boolean {
+        guardActorLoop()
+
+        val slot = timerSlots[key] ?: return false
+        val scheduled = slot.scheduled ?: return false
+        scheduled.job.cancel()
+        timerSlots[key] = slot.copy(scheduled = null)
+        return true
+    }
+
+    /**
+     * Cancels every tracked timer when explicit timer cancellation or actor shutdown begins.
+     */
+    private suspend fun cancelAllTrackedTimers() {
+        guardActorLoop()
+
         // Shutdown must detach timers before the runtime finishes draining work so no timer
         // outlives the actor or reintroduces commands during teardown.
-        activeTimers.values.forEach { timer -> timer.job.cancel() }
-        activeTimers.clear()
+        timerSlots.values.forEach { slot -> slot.scheduled?.job?.cancel() }
+        timerSlots.clear()
     }
+
+    /**
+     * Validates a fired timer event against the actor-loop-owned registry before delivering it as a
+     * normal command. Stale or canceled generations are ignored.
+     */
+    private suspend fun handleTimerFired(
+        actor: Actor<Command>,
+        ctx: DefaultActorContext<Command>,
+        event: SystemEvent.TimerFired<Command>,
+    ): Boolean {
+        guardActorLoop()
+
+        val slot = timerSlots[event.key] ?: return true
+        val scheduled = slot.scheduled ?: return true
+        if (scheduled.generation != event.generation) {
+            return true
+        }
+        if (scheduled.mode == TimerMode.Once) {
+            timerSlots[event.key] = slot.copy(scheduled = null)
+        }
+        handleCommand(actor, ctx, CommandEnvelope(event.command))
+        return true
+    }
+
+    private fun createTimerJob(
+        key: TimerKey,
+        generation: Long,
+        timerDelay: Duration,
+        command: Command,
+        mode: TimerMode,
+    ): Job =
+        if (mode == TimerMode.Once && timerDelay == Duration.ZERO) {
+            // Zero-delay still routes through the internal timer queue instead of self.tell(). That
+            // keeps startup-time scheduling valid before RUNNING and preserves stale-generation
+            // suppression.
+            scope.launch {
+                enqueueTimerFire(key = key, generation = generation, command = command)
+            }
+        } else {
+            launchTimerJob(
+                key = key,
+                generation = generation,
+                timerDelay = timerDelay,
+                command = command,
+                mode = mode,
+            )
+        }
 
     private fun launchTimerJob(
         key: TimerKey,

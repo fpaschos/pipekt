@@ -45,10 +45,15 @@ internal sealed interface WatchState {
     ) : WatchState
 }
 
-internal data class ActiveTimer(
+internal data class ScheduledTimer(
     val generation: Long,
     val mode: TimerMode,
     val job: Job,
+)
+
+internal data class TimerSlot(
+    val nextGeneration: Long = 0L,
+    val scheduled: ScheduledTimer? = null,
 )
 
 internal enum class TimerMode {
