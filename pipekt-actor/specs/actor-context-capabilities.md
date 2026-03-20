@@ -1,10 +1,10 @@
 # Actor Context Capabilities
 
-**Status:** Current context snapshot plus timer design note.
+**Status:** Current context snapshot.
 
-**Purpose:** Define the actor-facing `ActorContext` capability surface and the intended contract for timer APIs before implementation.
+**Purpose:** Define the actor-facing `ActorContext` capability surface and the implemented timer contract.
 
-**Precedence:** For implemented behavior, code wins. This document is narrower than [actor-semantics.md](./actor-semantics.md): it only covers actor-facing context capabilities. For timer APIs, this document is the planning source unless a later actor spec supersedes it.
+**Precedence:** For implemented behavior, code wins. This document is narrower than [actor-semantics.md](./actor-semantics.md): it only covers actor-facing context capabilities.
 
 ## Summary
 
@@ -16,7 +16,7 @@ Current `ActorContext` is a loop-confined capability object. It exposes:
 - lifecycle watch: `watch(...)`
 - actor-local shutdown: `stopSelf(...)`
 
-Planned timer capability should also live on context and should follow Akka-style keyed semantics:
+Current timer capability also lives on context and follows keyed timer semantics:
 
 - names: `once`, `repeated`, `cancel`, `cancelAll`
 - same key replaces existing timer
@@ -66,17 +66,15 @@ Rules:
 
 ### Status
 
-Not implemented.
+Implemented.
 
 ### Goal
 
-Support delayed and repeated self-messages without leaking coroutine `Job` management into actor code.
-
-The current pattern of launching a coroutine and later sending to `ctx.self` is not the intended long-term API. Timers should be represented as actor-owned runtime state.
+Support delayed and repeated self-messages without leaking coroutine `Job` management into actor code. Timers are represented as actor-owned runtime state and are delivered back to the actor through the runtime's internal timer queue.
 
 ### API Shape
 
-Use a timer namespace on context:
+The current timer namespace on context is:
 
 ```kotlin
 interface ActorContext<Command : Any> {
@@ -84,9 +82,9 @@ interface ActorContext<Command : Any> {
 }
 
 interface ActorTimers<Command : Any> {
-    suspend fun once(key: Any, delay: Duration, command: Command)
-    suspend fun repeated(key: Any, interval: Duration, command: Command)
-    suspend fun cancel(key: Any): Boolean
+    suspend fun once(key: TimerKey, delay: Duration, command: Command)
+    suspend fun repeated(key: TimerKey, interval: Duration, command: Command)
+    suspend fun cancel(key: TimerKey): Boolean
     suspend fun cancelAll()
 }
 ```
@@ -119,7 +117,7 @@ Adopt Akka-style keyed timer semantics.
 
 Rules:
 
-- timers are identified by `key`
+- timers are identified by `TimerKey`
 - `once(key, ...)` replaces any existing timer for that key
 - `repeated(key, ...)` replaces any existing timer for that key
 - replacement works across mode changes
@@ -132,7 +130,7 @@ Rules:
 
 ### Delivery Semantics
 
-Timer delivery must enqueue a normal self-message. Timer callbacks must not run actor code directly.
+Timer delivery is runtime-owned. A fired timer becomes an internal timer event first and is then handled on the actor loop as a normal self-message. Timer callbacks must not run actor code directly.
 
 Important rule:
 

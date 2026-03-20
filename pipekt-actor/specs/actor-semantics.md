@@ -12,7 +12,7 @@ The source code is the single source of truth. If this file and the code disagre
 | Identity | `name` is caller-provided and not unique. `label` is `name#id` and is unique within the process. |
 | Execution model | `handle(ctx, command)` runs on one loop coroutine. The runtime does not execute multiple commands concurrently. |
 | User admission | `tell()` accepts work only while lifecycle is `RUNNING`. Otherwise it fails with `ActorUnavailable(ACTOR_CLOSED)`. Actors use an explicit mailbox capacity. With the default `Reject` overflow strategy, a full mailbox fails with `ActorUnavailable(MAILBOX_FULL)`. |
-| Queues | User commands and system events are separated. User commands go through a bounded mailbox. Internal stop/watch traffic goes through an unbounded system queue. |
+| Queues | User commands and system events are separated. User commands go through a bounded mailbox. Internal stop/watch/timer traffic goes through an unbounded system queue. |
 | Ordering | User commands remain FIFO among themselves. Pending system events are processed before pending user commands. There is no total FIFO guarantee across the two queues. |
 | Scope ownership | `spawn(...)` derives an owned child scope from the caller's current coroutine context using `SupervisorJob(parentJob)`. The actor loop and actor-owned support coroutines run in that child scope. |
 | Startup | `postStart(ctx)` runs before lifecycle becomes `RUNNING`. `spawn(...)` waits for successful startup before returning the ref. |
