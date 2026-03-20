@@ -114,9 +114,8 @@ class ActorMailboxTest :
 
                                     override fun tell(command: String): Result<Unit> = Result.success(Unit)
 
-                                    override suspend fun shutdown(timeout: kotlin.time.Duration?) {
+                                    override suspend fun shutdown(timeout: kotlin.time.Duration?): Unit =
                                         throw UnsupportedOperationException("not used in test")
-                                    }
                                 },
                         ),
                     ).shouldBeSuccess(Unit)

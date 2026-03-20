@@ -27,9 +27,8 @@ internal class DeferredReplyActorRef<Reply : Any> :
             Result.failure(IllegalStateException("Reply already completed."))
         }
 
-    override suspend fun shutdown(timeout: kotlin.time.Duration?) {
+    override suspend fun shutdown(timeout: kotlin.time.Duration?): Unit =
         throw UnsupportedOperationException("Temporary ask reply actor refs do not support shutdown().")
-    }
 
     // Ask replies are one-shot: only the first successful reply or failure completes the request.
     override fun completeFailure(cause: Throwable): Boolean = deferred.completeExceptionally(cause)

@@ -6,6 +6,6 @@ import io.kotest.core.config.AbstractProjectConfig
 
 object ProjectConfig : AbstractProjectConfig() {
     init {
-        RootLogger.Logging.level = Level.DEBUG
+        RootLogger.Logging.level = Level.INFO
     }
 }

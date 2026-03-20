@@ -1,5 +1,6 @@
 package io.github.fpaschos.pipekt.actor
 
+import io.github.fpaschos.pipekt.actor.runtime.ActorRuntime
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import kotlin.ConsistentCopyVisibility

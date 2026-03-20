@@ -1,5 +1,7 @@
 package io.github.fpaschos.pipekt.actor
 
+import io.github.fpaschos.pipekt.actor.runtime.ActorRuntime
+import io.github.fpaschos.pipekt.actor.runtime.TimerMode
 import kotlinx.coroutines.currentCoroutineContext
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
@@ -240,9 +242,4 @@ internal class DefaultActorTimers<Command : Any>(
     override suspend fun cancelAll() {
         runtime.cancelAllTimers()
     }
-}
-
-internal enum class TimerMode {
-    Once,
-    Repeated,
 }
