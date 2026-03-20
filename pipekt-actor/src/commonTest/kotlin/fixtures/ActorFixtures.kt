@@ -204,7 +204,7 @@ class RecordingActor(
         }
     }
 
-    override fun onUndeliveredCommand(
+    override fun onUndelivered(
         ctx: io.github.fpaschos.pipekt.actor.ActorContext<TestCommand>,
         command: TestCommand,
         reason: io.github.fpaschos.pipekt.actor.ActorUnavailableReason,
@@ -224,7 +224,7 @@ class RecordingActor(
                 is TestCommand.CancelCurrent -> "CancelCurrent"
             }
         undelivered += "$label:${reason.name}"
-        super.onUndeliveredCommand(ctx, command, reason)
+        super.onUndelivered(ctx, command, reason)
     }
 }
 

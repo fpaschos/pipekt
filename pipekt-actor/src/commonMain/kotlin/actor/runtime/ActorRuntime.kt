@@ -306,7 +306,7 @@ internal class ActorRuntime<Command : Any>(
         } catch (t: Throwable) {
             terminalCause.compareAndSet(null, t)
             ActorLogger.commandFailed(label = label, cause = t)
-            actor.onCommandFailure(ctx, envelope.command, t)
+            actor.onFailure(ctx, envelope.command, t)
             envelope.askReply?.completeFailure(ActorCommandFailed(ctx.label, t))
             mailbox.close(t)
             dropPendingCommands(actor, ctx)
@@ -330,7 +330,7 @@ internal class ActorRuntime<Command : Any>(
     ) {
         while (true) {
             val envelope = mailbox.tryReceive().getOrNull() ?: break
-            actor.onUndeliveredCommand(ctx, envelope.command, ActorUnavailableReason.NOT_DELIVERED)
+            actor.onUndelivered(ctx, envelope.command, ActorUnavailableReason.NOT_DELIVERED)
             envelope.askReply?.completeFailure(
                 ActorUnavailable(
                     reason = ActorUnavailableReason.NOT_DELIVERED,

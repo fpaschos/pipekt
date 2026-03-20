@@ -51,9 +51,9 @@ abstract class Actor<Command : Any>(
      *
      * ### Failure
      * If this throws (other than cancellation), the actor will:
-     * - invoke [onCommandFailure]
+     * - invoke [onFailure]
      * - fail any in-flight "ask" reply
-     * - stop the actor and treat remaining queued commands as undelivered via [onUndeliveredCommand]
+     * - stop the actor and treat remaining queued commands as undelivered via [onUndelivered]
      *
      * If this throws [kotlinx.coroutines.CancellationException], the cancellation is treated as
      * actor shutdown: the in-flight "ask" reply (if any) fails with [ActorUnavailable], and the
@@ -90,7 +90,7 @@ abstract class Actor<Command : Any>(
      * This is intended for side effects like logging/metrics. Throwing from this callback does not
      * prevent shutdown.
      */
-    open suspend fun onCommandFailure(
+    open suspend fun onFailure(
         ctx: ActorContext<Command>,
         command: Command,
         cause: Throwable,
@@ -108,7 +108,7 @@ abstract class Actor<Command : Any>(
      * This callback is invoked on the actor loop coroutine while shutting down. It must be fast and
      * must not assume the actor is still running.
      */
-    open fun onUndeliveredCommand(
+    open fun onUndelivered(
         ctx: ActorContext<Command>,
         command: Command,
         reason: ActorUnavailableReason,
