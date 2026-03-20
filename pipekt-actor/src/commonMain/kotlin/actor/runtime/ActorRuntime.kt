@@ -513,36 +513,35 @@ private object UnsetStopTimeout
 
 private val UNSET_STOP_TIMEOUT: Any = UnsetStopTimeout
 
+/**
+ * Maps non-suspending mailbox admission into the public `tell()` result contract.
+ *
+ * Admission failure is split between "actor is closed" and "mailbox could not accept the command".
+ * The latter remains policy-driven so overflow strategies can vary without changing the send call
+ * site. Rejected overflow is still a pre-admission failure, not an undelivered command.
+ */
 private fun ChannelResult<Unit>.toActorSendResult(
     label: String,
     overflowStrategy: OverflowStrategy,
-): Result<Unit> =
-    when {
-        isSuccess -> {
-            Result.success(Unit)
-        }
+) : Result<Unit> {
+    if (isSuccess) {
+        return Result.success(Unit)
+    }
 
-        isClosed -> {
-            Result.failure(
-                ActorUnavailable(
-                    reason = ActorUnavailableReason.ACTOR_CLOSED,
-                    label = label,
-                    cause = exceptionOrNull(),
-                ),
-            )
-        }
-
-        else -> {
+    val reason =
+        if (isClosed) {
+            ActorUnavailableReason.ACTOR_CLOSED
+        } else {
             when (overflowStrategy) {
-                OverflowStrategy.Reject -> {
-                    Result.failure(
-                        ActorUnavailable(
-                            reason = ActorUnavailableReason.MAILBOX_FULL,
-                            label = label,
-                            cause = exceptionOrNull(),
-                        ),
-                    )
-                }
+                OverflowStrategy.Reject -> ActorUnavailableReason.MAILBOX_FULL
             }
         }
-    }
+
+    return Result.failure(
+        ActorUnavailable(
+            reason = reason,
+            label = label,
+            cause = exceptionOrNull(),
+        ),
+    )
+}
