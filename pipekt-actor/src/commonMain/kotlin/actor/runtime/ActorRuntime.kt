@@ -87,7 +87,7 @@ internal class ActorRuntime<Command : Any>(
                     }
 
                     while (keepRunning) {
-                        // Prioritize system events (stop/watch) to keep shutdown responsive under mailbox load.
+                        // Prioritize system events (stop/watch) to keep shutdown responsive under mailbox stress.
                         val immediateSystem = systemQueue.tryReceive().getOrNull()
                         if (immediateSystem != null) {
                             keepRunning = handleSystemEvent(actor, ctx, immediateSystem)
@@ -174,9 +174,7 @@ internal class ActorRuntime<Command : Any>(
         started.await()
     }
 
-    fun registerWatcher(
-        watcher: ActorRuntime<*>,
-    ) {
+    fun registerWatcher(watcher: ActorRuntime<*>) {
         while (true) {
             when (val state = watchState.value) {
                 is WatchState.Active -> {
@@ -213,7 +211,9 @@ internal class ActorRuntime<Command : Any>(
         event: SystemEvent<Command>,
     ): Boolean =
         when (event) {
-            is SystemEvent.Stop -> handleStop(actor, ctx, event.timeout)
+            is SystemEvent.Stop -> {
+                handleStop(actor, ctx, event.timeout)
+            }
 
             is SystemEvent.WatchNotification -> {
                 val mapped = ctx.dispatchWatchNotification(event.watched, event.termination) ?: return true
@@ -221,7 +221,10 @@ internal class ActorRuntime<Command : Any>(
                 true
             }
 
-            is SystemEvent.TimerFired -> handleTimerFired(actor, ctx, event)
+            is SystemEvent.TimerFired -> {
+                handleTimerFired(actor, ctx, event)
+                true
+            }
         }
 
     private suspend fun handleCommand(
@@ -431,7 +434,7 @@ internal class ActorRuntime<Command : Any>(
      * Drains already accepted mailbox work during cooperative shutdown.
      *
      * A `null` timeout means "drain until empty". A non-null timeout bounds only the draining
-     * phase; it does not interrupt the command that was already running before stop began.
+     * phase; it does not interrupt the command already running before stop began.
      */
     private suspend fun drainMailboxWithin(
         timeout: Duration?,
@@ -464,9 +467,7 @@ internal class ActorRuntime<Command : Any>(
         )
     }
 
-    suspend fun cancelTimer(key: TimerKey): Boolean {
-        return cancelTrackedTimer(key)
-    }
+    suspend fun cancelTimer(key: TimerKey): Boolean = cancelTrackedTimer(key)
 
     suspend fun cancelAllTimers() {
         cancelAllTrackedTimers()
@@ -541,19 +542,18 @@ internal class ActorRuntime<Command : Any>(
         actor: Actor<Command>,
         ctx: DefaultActorContext<Command>,
         event: SystemEvent.TimerFired<Command>,
-    ): Boolean {
+    ) {
         guardActorLoop()
 
-        val slot = timerSlots[event.key] ?: return true
-        val scheduled = slot.scheduled ?: return true
+        val slot = timerSlots[event.key] ?: return
+        val scheduled = slot.scheduled ?: return
         if (scheduled.generation != event.generation) {
-            return true
+            return
         }
         if (scheduled.mode == TimerMode.Once) {
             timerSlots[event.key] = slot.copy(scheduled = null)
         }
         handleCommand(actor, ctx, CommandEnvelope(event.command))
-        return true
     }
 
     private fun createTimerJob(
@@ -626,13 +626,13 @@ private val UNSET_STOP_TIMEOUT: Any = UnsetStopTimeout
  * Maps non-suspending mailbox admission into the public `tell()` result contract.
  *
  * Admission failure is split between "actor is closed" and "mailbox could not accept the command".
- * The latter remains policy-driven so overflow strategies can vary without changing the send call
+ * The latter remains policy driven so overflow strategies can vary without changing send call
  * site. Rejected overflow is still a pre-admission failure, not an undelivered command.
  */
 private fun ChannelResult<Unit>.toActorSendResult(
     label: String,
     overflowStrategy: OverflowStrategy,
-) : Result<Unit> {
+): Result<Unit> {
     if (isSuccess) {
         return Result.success(Unit)
     }
