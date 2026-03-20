@@ -4,7 +4,7 @@
 - `pipekt` is a Kotlin Multiplatform monorepo for long-running data pipelines.
 - Root modules are `pipekt`, `pipekt-actor`, and `pipekt-amqp`.
 - The project is still experimental; prefer small, focused changes that preserve existing design direction.
-- Treat `plans/` as a high-signal source of current architecture intent when it is relevant to the task.
+- Treat top level  `specs/` as a high-signal source of current architecture intent when it is relevant to the task.
 
 ## Repository Layout
 - `pipekt/` contains the core pipeline DSL, contracts, and runtime pieces.
