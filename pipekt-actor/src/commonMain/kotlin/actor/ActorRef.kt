@@ -107,25 +107,13 @@ interface ActorRef<in Command : Any> {
     suspend fun shutdown(timeout: Duration? = null)
 }
 
-internal interface AskCapableActorRef<in Command : Any> : ActorRef<Command> {
-    fun sendForAsk(
-        command: Command,
-        askReply: Any,
-    ): Result<Unit>
-}
-
 @ConsistentCopyVisibility
 data class DefaultActorRef<Command : Any> internal constructor(
     override val name: String,
     override val label: String,
     internal val runtime: ActorRuntime<Command>,
-) : AskCapableActorRef<Command> {
+) : ActorRef<Command> {
     override fun tell(command: Command): Result<Unit> = runtime.send(command)
-
-    override fun sendForAsk(
-        command: Command,
-        askReply: Any,
-    ): Result<Unit> = runtime.send(command, askReply as AskReplyHandle)
 
     override suspend fun shutdown(timeout: Duration?) {
         runtime.shutdown(timeout)
@@ -155,8 +143,9 @@ suspend fun <Command : Any, Reply : Any> ActorRef<Command>.ask(
     val reply = deferredReplyActorRef<Reply>()
     val command = block(reply)
     val enqueue =
-        (this as? AskCapableActorRef<Command>)
-            ?.sendForAsk(command, reply)
+        (this as? DefaultActorRef<Command>)
+            ?.runtime
+            ?.send(command, reply)
             ?: tell(command)
     if (enqueue.isFailure) {
         return Result.failure(enqueue.exceptionOrNull()!!)
