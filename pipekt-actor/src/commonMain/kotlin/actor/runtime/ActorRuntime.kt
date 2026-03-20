@@ -20,13 +20,13 @@ import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ChannelResult
 import kotlinx.coroutines.channels.getOrElse
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
@@ -156,7 +156,7 @@ internal class ActorRuntime<Command : Any>(
                         publishTermination()
                         notifyTermination()
                         systemQueue.close()
-                        cancelOwnedScope()
+                        scope.cancel()
                     }
                 }
             }
@@ -188,7 +188,7 @@ internal class ActorRuntime<Command : Any>(
         }
         requestStop(timeout)
         terminated.await()
-        cancelOwnedScope()
+        scope.cancel()
     }
 
     fun requestStop(timeout: Duration?) {
@@ -408,12 +408,6 @@ internal class ActorRuntime<Command : Any>(
                     return
                 }
             }
-        }
-    }
-
-    private fun cancelOwnedScope() {
-        if (scope.coroutineContext[OwnedActorScope.Key] != null) {
-            scope.coroutineContext.job.cancel()
         }
     }
 

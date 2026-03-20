@@ -45,3 +45,9 @@ This file records the design choices implemented by the current actor runtime.
 
 14. Keep ordering guarantees minimal.
     User commands are FIFO among themselves, and pending system events run before pending user commands.
+
+15. Derive actor ownership from the caller's coroutine context.
+    `spawn(...)` creates a dedicated child scope under the caller's job and cancels that owned scope when the actor terminates.
+
+16. Use supervisor semantics for the actor-owned child scope.
+    Actor-owned support coroutines are siblings under `SupervisorJob(parent)` so parent cancellation still propagates down, but sibling child failures do not implicitly take down the whole actor.

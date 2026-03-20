@@ -5,13 +5,6 @@ import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlin.coroutines.AbstractCoroutineContextElement
-import kotlin.coroutines.CoroutineContext
-
-internal data object OwnedActorScope :
-    AbstractCoroutineContextElement(Key) {
-    object Key : CoroutineContext.Key<OwnedActorScope>
-}
 
 internal fun createActorScope(
     parentScope: CoroutineScope,
@@ -20,7 +13,7 @@ internal fun createActorScope(
 ): CoroutineScope {
     val parentContext = parentScope.coroutineContext
     val childJob = SupervisorJob(parentContext[Job])
-    var scopeContext = parentContext + childJob + CoroutineName(name) + OwnedActorScope
+    var scopeContext = parentContext + childJob + CoroutineName(name)
     if (dispatcher != null) {
         scopeContext += dispatcher
     }

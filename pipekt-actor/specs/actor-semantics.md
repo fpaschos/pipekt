@@ -14,13 +14,14 @@ The source code is the single source of truth. If this file and the code disagre
 | User admission | `tell()` accepts work only while lifecycle is `RUNNING`. Otherwise it fails with `ActorUnavailable(ACTOR_CLOSED)`. A full mailbox fails with `ActorUnavailable(MAILBOX_FULL)`. |
 | Queues | User commands and system events are separated. User commands go through a bounded mailbox. Internal stop/watch traffic goes through an unbounded system queue. |
 | Ordering | User commands remain FIFO among themselves. Pending system events are processed before pending user commands. There is no total FIFO guarantee across the two queues. |
+| Scope ownership | `spawn(...)` derives an owned child scope from the caller's current coroutine context using `SupervisorJob(parentJob)`. The actor loop and actor-owned support coroutines run in that child scope. |
 | Startup | `postStart(ctx)` runs before lifecycle becomes `RUNNING`. `spawn(...)` waits for successful startup before returning the ref. |
 | Stop during startup | If stop is requested after `postStart(ctx)` returns but before `RUNNING` is published, startup fails with `CancellationException`, `preStop(ctx)` runs, and the actor never reaches `RUNNING`. |
 | Shutdown API | `shutdown(timeout)` requests stop and waits for termination. It is invalid to call it from the actor's own loop coroutine. Actor code must use `ctx.stopSelf(...)` instead. |
 | Shutdown timeout | `timeout` only bounds draining already accepted user commands after stop begins. It does not bound total termination time or interrupt the current handler. |
 | Concurrent shutdowns | First stop request wins. Later shutdown callers only wait on the same termination barrier. |
 | Shutdown sequence | When `SystemEvent.Stop` is handled, lifecycle becomes `SHUTTING_DOWN`, the user mailbox closes, `preStop(ctx)` runs, then queued user commands are drained. If drain times out, remaining queued user commands are dropped as `NOT_DELIVERED`. |
-| Termination | In `finally`, lifecycle becomes `SHUTDOWN`, `postStop(ctx)` runs, termination is published to watchers, the termination barrier completes, and the owned scope job is cancelled. |
+| Termination | In `finally`, lifecycle becomes `SHUTDOWN`, `postStop(ctx)` runs, termination is published to watchers, the termination barrier completes, and the owned actor scope is cancelled. |
 | Cancellation | `CancellationException` is treated as coroutine cancellation, not command failure. The actor still terminates, but accepted requests do not become `ActorCommandFailed` just because the runtime was cancelled. |
 | Cleanup | `preStop(ctx)` and `postStop(ctx)` run in `NonCancellable`. `preStop` is executed at most once. |
 | Handler failure | If `handle(...)` throws a non-cancellation failure, `onCommandFailure(...)` runs, the current ask reply is failed with `ActorCommandFailed`, queued ask replies are failed as `NOT_DELIVERED`, and the actor terminates. |
@@ -46,5 +47,6 @@ The source code is the single source of truth. If this file and the code disagre
 ## Notes
 
 - `ask()` still is not mailbox backpressure. It first tries normal admission, then waits for a reply.
-- Parent coroutine cancellation still terminates spawned actors because `spawn(...)` derives ownership from `currentCoroutineContext()`.
+- Parent coroutine cancellation still terminates spawned actors because `spawn(...)` creates a child scope under `currentCoroutineContext()`.
+- The child scope is supervisory, so actor-owned support coroutines do not implicitly fail the whole actor just by failing as siblings.
 - Actor state is not transactional. Cancellation can leave in-memory state partially updated if a handler mutates state before a suspension point.

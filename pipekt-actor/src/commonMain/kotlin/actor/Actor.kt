@@ -121,18 +121,27 @@ internal val nextActorInstanceId = atomic(0L)
 /**
  * Spawns a new actor and suspends until it has started.
  *
- * The actor runs in a child coroutine of the caller's current coroutine context. If [dispatcher]
- * is provided, the actor loop is executed on that dispatcher; otherwise it inherits the caller's
- * dispatcher.
+ * The actor runtime derives its ownership from the caller's current coroutine context. `spawn(...)`
+ * creates a dedicated child [kotlinx.coroutines.SupervisorJob] under the caller's current [kotlinx.coroutines.Job]
+ * and runs the actor loop inside that child scope. If [dispatcher] is provided, the actor loop uses
+ * that dispatcher; otherwise it inherits the caller's dispatcher.
  *
  * ### Concurrency
  * - The actor processes commands sequentially on a single coroutine (actor loop).
  * - Actor-confined mutable state must only be accessed from [Actor] callbacks.
+ * - Actor-owned support coroutines (for example internal timers) are launched in the same owned
+ *   child scope as the actor loop.
+ * - The owned child scope uses supervisor semantics: failure of one actor-owned child coroutine does
+ *   not automatically cancel sibling actor-owned coroutines.
+ * - Cancellation from the caller's coroutine context still propagates into the actor because the
+ *   owned child scope remains a child of the caller's job.
  *
  * ### Failure and cancellation
  * - If [factory] throws, this function fails and no actor is started.
  * - If [Actor.postStart] throws, or the actor loop is cancelled during startup, this function
  *   fails and no running actor is returned.
+ * - If the caller's parent job is cancelled after startup, the actor is cancelled as part of normal
+ *   structured concurrency.
  *
  * ### Example
  * ```kotlin
