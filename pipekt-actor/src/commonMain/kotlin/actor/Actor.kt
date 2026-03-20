@@ -155,7 +155,8 @@ abstract class Actor<Command : Any>(
         ctx: ActorContext<Command>,
         command: Command,
         cause: Throwable,
-    ) {}
+    ) {
+    }
 
     /**
      * Called for commands that were accepted by the caller but could not be delivered/processed.
@@ -172,7 +173,8 @@ abstract class Actor<Command : Any>(
         ctx: ActorContext<Command>,
         command: Command,
         reason: ActorUnavailableReason,
-    ) {}
+    ) {
+    }
 }
 
 internal class ActorRuntime<Command : Any>(
@@ -209,9 +211,11 @@ internal class ActorRuntime<Command : Any>(
         selfRef = ref
     }
 
-    fun canRegisterWatches(): Boolean = lifecycle.value != ActorLifecycle.SHUTTING_DOWN && lifecycle.value != ActorLifecycle.SHUTDOWN
+    fun canRegisterWatches(): Boolean =
+        lifecycle.value != ActorLifecycle.SHUTTING_DOWN && lifecycle.value != ActorLifecycle.SHUTDOWN
 
-    fun canScheduleTimers(): Boolean = lifecycle.value != ActorLifecycle.SHUTTING_DOWN && lifecycle.value != ActorLifecycle.SHUTDOWN
+    fun canScheduleTimers(): Boolean =
+        lifecycle.value != ActorLifecycle.SHUTTING_DOWN && lifecycle.value != ActorLifecycle.SHUTDOWN
 
     fun start(actor: Actor<Command>) {
         check(!::loopJob.isInitialized) { "Actor runtime for $label already started." }
@@ -744,7 +748,8 @@ suspend fun <Command : Any> spawn(
     val parentScope = CoroutineScope(currentCoroutineContext())
     val id = nextActorInstanceId.incrementAndGet()
     val label = "$name#$id"
-    val runtime = ActorRuntime(name = name, label = label, parentScope = parentScope, dispatcher = dispatcher, actor = actor)
+    val runtime =
+        ActorRuntime(name = name, label = label, parentScope = parentScope, dispatcher = dispatcher, actor = actor)
     val ref = DefaultActorRef(name = name, label = label, runtime = runtime)
     runtime.attachRef(ref)
     runtime.start(actor)

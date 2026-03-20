@@ -9,6 +9,7 @@ These documents are the active source of truth for the current `pipekt` core mod
 - [streams-core-architecture.md](./specs/streams-core-architecture.md)
 - [streams-delivery-phases.md](./specs/streams-delivery-phases.md)
 - [streams-technical-requirements.md](./specs/streams-technical-requirements.md)
+- [streams-hard-backpressure-high-throughput-design.md](./specs/streams-hard-backpressure-high-throughput-design.md)
 - [streams-phase-2-fix-plan.md](./specs/streams-phase-2-fix-plan.md)
 - [streams-example-earthquake-enrichment.md](./specs/streams-example-earthquake-enrichment.md)
 
@@ -21,11 +22,13 @@ Precedence:
 3. [streams-core-architecture.md](./specs/streams-core-architecture.md) wins for intended package boundaries and ownership model.
 4. [streams-delivery-phases.md](./specs/streams-delivery-phases.md) wins for sequencing and milestone intent.
 5. [streams-technical-requirements.md](./specs/streams-technical-requirements.md) wins for operational guidance and tuning.
-6. [streams-phase-2-fix-plan.md](./specs/streams-phase-2-fix-plan.md) wins for unresolved correctness gaps that must be closed before Phase 3.
+6. [streams-hard-backpressure-high-throughput-design.md](./specs/streams-hard-backpressure-high-throughput-design.md) wins for the target hard-admission design that should replace the current soft `maxInFlight` throttle when the Postgres-backed runtime is hardened.
+7. [streams-phase-2-fix-plan.md](./specs/streams-phase-2-fix-plan.md) wins for unresolved correctness gaps that must be closed before Phase 3.
 
 Reading notes:
 
 - `streams-technical-requirements.md` covers orthogonal runtime concerns (default values, error handling, DB performance, pipeline registry, and code organization).
+- `streams-hard-backpressure-high-throughput-design.md` explains the intended store-enforced hard backpressure model, including admission-state ownership, ingress buffering, and Postgres transaction shape.
 - `streams-phase-2-fix-plan.md` is the concrete remediation checklist for the current runtime/store drift, now including the remaining `runtime.new` findings and the already-addressed v2 architecture reference.
 - `streams-example-earthquake-enrichment.md` is an illustrative example, not a higher-precedence contract document.
 
