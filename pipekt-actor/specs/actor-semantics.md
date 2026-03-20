@@ -30,7 +30,7 @@ The source code is the single source of truth. If this file and the code disagre
 | Actor-to-actor replies | A normal actor ref can be used directly as `replyTo` when protocols line up, so replies stay ordinary actor messaging. |
 | Watching | `watch(ref)` is loop-confined, accepts only `DefaultActorRef`, rejects self-watch, and rejects new registration while the watcher is shutting down. |
 | Watch semantics | Watches are idempotent per watcher/target pair while active. Duplicate `watch(target, ...)` calls are a no-op and keep the first mapper. |
-| Watch delivery | Successful watch registration guarantees that target termination is enqueued onto the watcher system queue instead of competing with user mailbox capacity. If the target already terminated, notification is enqueued immediately. |
+| Watch delivery | Successful watch registration guarantees that target termination is enqueued onto the watcher system queue instead of competing with user mailbox capacity. If the target already terminated, notification is enqueued immediately. Internally, the watcher maps terminations by watched runtime identity rather than a generated token. |
 | Watch lifetime | A watch remains active until one termination notification is delivered and mapped back into a normal command. After that it is removed from the watcher context. |
 | Ownership model | There is no parent/child ownership API in this layer. Watching another actor does not imply restart or automatic lifecycle ownership. |
 

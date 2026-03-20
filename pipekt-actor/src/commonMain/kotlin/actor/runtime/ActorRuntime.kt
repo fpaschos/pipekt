@@ -49,7 +49,7 @@ internal class ActorRuntime<Command : Any>(
     private val terminated = CompletableDeferred<Unit>()
     private val lifecycle = atomic(ActorLifecycle.STARTING)
     private val terminalCause = atomic<Throwable?>(null)
-    private val watchState = atomic<WatchState>(WatchState.Active(emptyMap()))
+    private val watchState = atomic<WatchState>(WatchState.Active(emptySet()))
 
     // Stop can be requested while STARTING; we detect it after postStart and fail startup consistently.
     private val stopRequest = atomic<Any?>(UNSET_STOP_TIMEOUT)
@@ -177,23 +177,23 @@ internal class ActorRuntime<Command : Any>(
 
     fun registerWatcher(
         watcher: ActorRuntime<*>,
-        token: Long,
     ) {
         while (true) {
             when (val state = watchState.value) {
                 is WatchState.Active -> {
-                    if (state.listeners.containsKey(watcher)) {
+                    if (state.listeners.contains(watcher)) {
                         return
                     }
-                    val updated = WatchState.Active(state.listeners + (watcher to token))
+                    val updated = WatchState.Active(state.listeners + watcher)
                     if (watchState.compareAndSet(state, updated)) {
                         return
                     }
                 }
 
                 is WatchState.Terminated -> {
-                    // Linearize watch registration against termination: if already terminated, notify immediately.
-                    watcher.enqueueWatchNotification(token, state.termination)
+                    // Linearize registration against termination: once a target is already terminated,
+                    // the watcher can be notified immediately using the watched runtime identity.
+                    watcher.enqueueWatchNotification(this, state.termination)
                     return
                 }
             }
@@ -201,10 +201,11 @@ internal class ActorRuntime<Command : Any>(
     }
 
     private fun enqueueWatchNotification(
-        token: Long,
+        watched: ActorRuntime<*>,
         termination: ActorTermination,
     ) {
-        systemQueue.trySend(SystemEvent.WatchNotification(token, termination))
+        // Watch delivery bypasses the user mailbox so mailbox pressure cannot drop lifecycle events.
+        systemQueue.trySend(SystemEvent.WatchNotification(watched, termination))
     }
 
     private suspend fun handleSystemEvent(
@@ -216,7 +217,7 @@ internal class ActorRuntime<Command : Any>(
             is SystemEvent.Stop -> handleStop(actor, ctx, event.timeout)
 
             is SystemEvent.WatchNotification -> {
-                val mapped = ctx.dispatchWatchNotification(event.token, event.termination) ?: return true
+                val mapped = ctx.dispatchWatchNotification(event.watched, event.termination) ?: return true
                 handleCommand(actor, ctx, CommandEnvelope(mapped))
                 true
             }
@@ -346,8 +347,8 @@ internal class ActorRuntime<Command : Any>(
             when (val state = watchState.value) {
                 is WatchState.Active -> {
                     if (watchState.compareAndSet(state, WatchState.Terminated(termination))) {
-                        state.listeners.forEach { (watcher, token) ->
-                            watcher.enqueueWatchNotification(token, termination)
+                        state.listeners.forEach { watcher ->
+                            watcher.enqueueWatchNotification(this, termination)
                         }
                         return
                     }

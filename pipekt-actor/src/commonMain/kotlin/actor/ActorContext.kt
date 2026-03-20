@@ -151,10 +151,9 @@ internal class DefaultActorContext<Command : Any>(
     override val self: ActorRef<Command>,
     private val runtime: ActorRuntime<Command>,
 ) : ActorContext<Command> {
-    // Watch mappings are owned by the watcher. They are removed after the first termination event.
-    private val watchMappers = mutableMapOf<Long, Pair<ActorRuntime<*>, (ActorTermination) -> Command>>()
-    private val watchedActors = mutableMapOf<ActorRuntime<*>, Long>()
-    private var nextWatchToken: Long = 0
+    // Mapper closures are watcher-owned because only the watcher knows how to translate a target
+    // termination into its own command type. The mapping is removed after the first delivery.
+    private val watchedActors = mutableMapOf<ActorRuntime<*>, (ActorTermination) -> Command>()
     override val timers: ActorTimers<Command> = DefaultActorTimers(runtime)
 
     override suspend fun guardActorAccess() {
@@ -179,10 +178,8 @@ internal class DefaultActorContext<Command : Any>(
             return
         }
 
-        val token = ++nextWatchToken
-        watchMappers[token] = target.runtime to onTerminated
-        watchedActors[target.runtime] = token
-        target.runtime.registerWatcher(runtime, token)
+        watchedActors[target.runtime] = onTerminated
+        target.runtime.registerWatcher(runtime)
     }
 
     override suspend fun stopSelf(timeout: Duration?) {
@@ -191,13 +188,12 @@ internal class DefaultActorContext<Command : Any>(
     }
 
     internal fun dispatchWatchNotification(
-        token: Long,
+        watched: ActorRuntime<*>,
         termination: ActorTermination,
     ): Command? {
         // Watch delivery is one-shot. Once a termination is mapped back into a user command, the
         // watcher must no longer consider that watch active.
-        val (target, mapper) = watchMappers.remove(token) ?: return null
-        watchedActors.remove(target)
+        val mapper = watchedActors.remove(watched) ?: return null
         return mapper(termination)
     }
 }

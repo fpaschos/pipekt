@@ -24,7 +24,7 @@ internal sealed interface SystemEvent<out Command : Any> {
     ) : SystemEvent<Nothing>
 
     data class WatchNotification(
-        val token: Long,
+        val watched: ActorRuntime<*>,
         val termination: ActorTermination,
     ) : SystemEvent<Nothing>
 
@@ -37,7 +37,7 @@ internal sealed interface SystemEvent<out Command : Any> {
 
 internal sealed interface WatchState {
     data class Active(
-        val listeners: Map<ActorRuntime<*>, Long>,
+        val listeners: Set<ActorRuntime<*>>,
     ) : WatchState
 
     data class Terminated(
