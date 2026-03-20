@@ -80,20 +80,11 @@ internal class ActorRuntime<Command : Any>(
                     actor.postStart(ctx)
 
                     if (stopRequest.value !== UNSET_STOP_TIMEOUT) {
-                        lifecycle.value = ActorLifecycle.SHUTTING_DOWN
                         val cause = CancellationException("$label was stopped during startup")
-                        terminalCause.compareAndSet(null, cause)
-                        ActorLogger.startupFailed(label = label, cause = cause)
-                        notifyStartFail(cause)
-                        cancelAllActiveTimers()
-                        mailbox.close()
-                        runPreStop(actor, ctx)
-                        dropPendingCommands(actor, ctx)
+                        abortActor(actor, ctx, cause = cause, mailboxCause = null)
                         keepRunning = false
                     } else {
-                        lifecycle.value = ActorLifecycle.RUNNING
-                        ActorLogger.started(label = label)
-                        notifyStart()
+                        publishStarted()
                     }
 
                     while (keepRunning) {
@@ -122,28 +113,10 @@ internal class ActorRuntime<Command : Any>(
                         }
                     }
                 } catch (ce: CancellationException) {
-                    terminalCause.compareAndSet(null, ce)
-                    lifecycle.value = ActorLifecycle.SHUTTING_DOWN
-                    cancelAllActiveTimers()
-                    mailbox.close(ce)
-                    if (!started.isCompleted) {
-                        ActorLogger.startupFailed(label = label, cause = ce)
-                    }
-                    notifyStartFail(ce)
-                    runPreStop(actor, ctx)
-                    dropPendingCommands(actor, ctx)
+                    abortActor(actor, ctx, cause = ce, mailboxCause = ce)
                     throw ce
                 } catch (t: Throwable) {
-                    terminalCause.compareAndSet(null, t)
-                    lifecycle.value = ActorLifecycle.SHUTTING_DOWN
-                    cancelAllActiveTimers()
-                    mailbox.close(t)
-                    if (!started.isCompleted) {
-                        ActorLogger.startupFailed(label = label, cause = t)
-                    }
-                    notifyStartFail(t)
-                    runPreStop(actor, ctx)
-                    dropPendingCommands(actor, ctx)
+                    abortActor(actor, ctx, cause = t, mailboxCause = t)
                 } finally {
                     lifecycle.value = ActorLifecycle.SHUTDOWN
                     try {
@@ -240,28 +213,7 @@ internal class ActorRuntime<Command : Any>(
         event: SystemEvent<Command>,
     ): Boolean =
         when (event) {
-            is SystemEvent.Stop -> {
-                lifecycle.value = ActorLifecycle.SHUTTING_DOWN
-                cancelAllActiveTimers()
-                mailbox.close()
-                runPreStop(actor, ctx)
-
-                val drained =
-                    if (event.timeout == null) {
-                        drainMailbox(actor, ctx)
-                        true
-                    } else {
-                        withTimeoutOrNull(event.timeout) {
-                            drainMailbox(actor, ctx)
-                            true
-                        } == true
-                    }
-
-                if (!drained) {
-                    dropPendingCommands(actor, ctx)
-                }
-                false
-            }
+            is SystemEvent.Stop -> handleStop(actor, ctx, event.timeout)
 
             is SystemEvent.WatchNotification -> {
                 val mapped = ctx.dispatchWatchNotification(event.token, event.termination) ?: return true
@@ -407,6 +359,105 @@ internal class ActorRuntime<Command : Any>(
             }
         }
     }
+
+    /**
+     * Publishes the transition from startup into normal command admission.
+     */
+    private fun publishStarted() {
+        lifecycle.value = ActorLifecycle.RUNNING
+        ActorLogger.started(label = label)
+        notifyStart()
+    }
+
+    /**
+     * Marks the runtime as shutting down and prevents any further timer or mailbox admission.
+     *
+     * `mailboxCause` is only used on abort/failure paths where mailbox closure should retain the
+     * triggering exception. Cooperative stop closes the mailbox without a cause.
+     */
+    private fun beginShutdown(mailboxCause: Throwable?) {
+        lifecycle.value = ActorLifecycle.SHUTTING_DOWN
+        cancelAllActiveTimers()
+        if (mailboxCause == null) {
+            mailbox.close()
+        } else {
+            mailbox.close(mailboxCause)
+        }
+    }
+
+    /**
+     * Fails the startup barrier exactly once if the actor never reached RUNNING.
+     *
+     * Shutdown paths after successful startup still call this helper, but `started` is already
+     * completed in that case so the method becomes a no-op.
+     */
+    private fun failStartupIfNeeded(cause: Throwable) {
+        if (!started.isCompleted) {
+            ActorLogger.startupFailed(label = label, cause = cause)
+        }
+        notifyStartFail(cause)
+    }
+
+    /**
+     * Runs the shared abort path used by startup-stop, external cancellation, and command failure.
+     *
+     * Unlike cooperative stop, this path does not drain already accepted mailbox work. Pending
+     * commands are dropped immediately as undelivered after teardown begins.
+     */
+    private suspend fun abortActor(
+        actor: Actor<Command>,
+        ctx: DefaultActorContext<Command>,
+        cause: Throwable,
+        mailboxCause: Throwable?,
+    ) {
+        terminalCause.compareAndSet(null, cause)
+        beginShutdown(mailboxCause)
+        failStartupIfNeeded(cause)
+        runPreStop(actor, ctx)
+        dropPendingCommands(actor, ctx)
+    }
+
+    /**
+     * Executes cooperative stop semantics for `shutdown(...)` / `ctx.stopSelf(...)`.
+     *
+     * The current command is allowed to finish before this method runs. After shutdown begins, the
+     * mailbox is closed, teardown starts, and the runtime drains already accepted commands until the
+     * optional timeout elapses. Any commands still queued after a timeout are reported as
+     * NOT_DELIVERED.
+     */
+    private suspend fun handleStop(
+        actor: Actor<Command>,
+        ctx: DefaultActorContext<Command>,
+        timeout: Duration?,
+    ): Boolean {
+        beginShutdown(mailboxCause = null)
+        runPreStop(actor, ctx)
+
+        if (!drainMailboxWithin(timeout, actor, ctx)) {
+            dropPendingCommands(actor, ctx)
+        }
+        return false
+    }
+
+    /**
+     * Drains already accepted mailbox work during cooperative shutdown.
+     *
+     * A `null` timeout means "drain until empty". A non-null timeout bounds only the draining
+     * phase; it does not interrupt the command that was already running before stop began.
+     */
+    private suspend fun drainMailboxWithin(
+        timeout: Duration?,
+        actor: Actor<Command>,
+        ctx: DefaultActorContext<Command>,
+    ): Boolean =
+        if (timeout == null) {
+            drainMailbox(actor, ctx)
+            true
+        } else {
+            withTimeoutOrNull(timeout) {
+                drainMailbox(actor, ctx)
+            } != null
+        }
 
     suspend fun scheduleTimer(
         key: TimerKey,
