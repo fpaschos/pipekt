@@ -11,7 +11,7 @@ The source code is the single source of truth. If this file and the code disagre
 | Construction | `spawn(...)` creates an actor instance, a process-local unique `label`, an internal runtime, and a `DefaultActorRef`. |
 | Identity | `name` is caller-provided and not unique. `label` is `name#id` and is unique within the process. |
 | Execution model | `handle(ctx, command)` runs on one loop coroutine. The runtime does not execute multiple commands concurrently. |
-| User admission | `tell()` accepts work only while lifecycle is `RUNNING`. Otherwise it fails with `ActorUnavailable(ACTOR_CLOSED)`. A full mailbox fails with `ActorUnavailable(MAILBOX_FULL)`. |
+| User admission | `tell()` accepts work only while lifecycle is `RUNNING`. Otherwise it fails with `ActorUnavailable(ACTOR_CLOSED)`. Actors use an explicit mailbox capacity. With the default `Reject` overflow strategy, a full mailbox fails with `ActorUnavailable(MAILBOX_FULL)`. |
 | Queues | User commands and system events are separated. User commands go through a bounded mailbox. Internal stop/watch traffic goes through an unbounded system queue. |
 | Ordering | User commands remain FIFO among themselves. Pending system events are processed before pending user commands. There is no total FIFO guarantee across the two queues. |
 | Scope ownership | `spawn(...)` derives an owned child scope from the caller's current coroutine context using `SupervisorJob(parentJob)`. The actor loop and actor-owned support coroutines run in that child scope. |
@@ -24,8 +24,8 @@ The source code is the single source of truth. If this file and the code disagre
 | Termination | In `finally`, lifecycle becomes `SHUTDOWN`, `postStop(ctx)` runs, termination is published to watchers, the termination barrier completes, and the owned actor scope is cancelled. |
 | Cancellation | `CancellationException` is treated as coroutine cancellation, not command failure. The actor still terminates, but accepted requests do not become `ActorCommandFailed` just because the runtime was cancelled. |
 | Cleanup | `preStop(ctx)` and `postStop(ctx)` run in `NonCancellable`. `preStop` is executed at most once. |
-| Handler failure | If `handle(...)` throws a non-cancellation failure, `onCommandFailure(...)` runs, the current ask reply is failed with `ActorCommandFailed`, queued ask replies are failed as `NOT_DELIVERED`, and the actor terminates. |
-| Undelivered commands | Dropped queued user commands are reported through `onUndeliveredCommand(ctx, command, NOT_DELIVERED)`. If a dropped command came from external `ask()`, that caller fails with `ActorUnavailable(NOT_DELIVERED)`. |
+| Handler failure | If `handle(...)` throws a non-cancellation failure, `onFailure(...)` runs, the current ask reply is failed with `ActorCommandFailed`, queued ask replies are failed as `NOT_DELIVERED`, and the actor terminates. |
+| Undelivered commands | Dropped queued user commands are reported through `onUndelivered(ctx, command, NOT_DELIVERED)`. If a dropped command came from external `ask()`, that caller fails with `ActorUnavailable(NOT_DELIVERED)`. Rejected overflow is not reported through `onUndelivered(...)` because the command was never admitted. |
 | Request/reply | Commands that expect a reply carry `replyTo: ActorRef<T>`. External `ask()` creates a temporary one-shot actor ref, sends the command, and waits with timeout. The first reply wins. |
 | Actor-to-actor replies | A normal actor ref can be used directly as `replyTo` when protocols line up, so replies stay ordinary actor messaging. |
 | Watching | `watch(ref)` is loop-confined, accepts only `DefaultActorRef`, rejects self-watch, and rejects new registration while the watcher is shutting down. |
@@ -41,8 +41,8 @@ The source code is the single source of truth. If this file and the code disagre
 | `postStart(ctx)` | Runs on the loop before `RUNNING` is published. |
 | `preStop(ctx)` | Runs once, in `NonCancellable`, when cooperative stop starts or when cancellation/failure terminates the actor. |
 | `postStop(ctx)` | Runs in `NonCancellable` from `finally` before termination is published. |
-| `onCommandFailure(ctx, command, cause)` | Runs on the loop after a non-cancellation `handle(...)` failure and before the actor terminates. Default behavior is no-op. |
-| `onUndeliveredCommand(ctx, command, reason)` | Runs when queued user commands are dropped without reaching `handle(...)`. Default behavior is no-op. |
+| `onFailure(ctx, command, cause)` | Runs on the loop after a non-cancellation `handle(...)` failure and before the actor terminates. Default behavior is no-op. |
+| `onUndelivered(ctx, command, reason)` | Runs when queued user commands are dropped without reaching `handle(...)`. Default behavior is no-op. |
 
 ## Notes
 

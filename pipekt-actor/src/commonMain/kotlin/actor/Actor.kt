@@ -8,6 +8,31 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 
 /**
+ * Default user-mailbox capacity used by [Actor] when no explicit capacity is provided.
+ *
+ * This value keeps mailbox sizing explicit in the API while preserving a moderate default buffer
+ * for actors that do not need workload-specific tuning. Actors with well-defined admission or
+ * backpressure requirements should pass a concrete capacity instead of relying on this default.
+ */
+const val DEFAULT_MAILBOX_CAPACITY: Int = 64
+
+/**
+ * Policy applied when an actor's user mailbox cannot accept another command.
+ *
+ * Overflow handling is evaluated before a command is admitted to the actor. Rejected overflow is
+ * therefore surfaced directly to the sender and is not reported through [Actor.onUndelivered].
+ */
+enum class OverflowStrategy {
+    /**
+     * Reject the send immediately and return `ActorUnavailable(MAILBOX_FULL)` to the caller.
+     *
+     * This keeps `tell()` non-blocking, makes backpressure visible at the admission boundary, and
+     * avoids silently dropping commands by default.
+     */
+    Reject,
+}
+
+/**
  * Base actor behavior.
  *
  * An [Actor] processes commands sequentially on a single coroutine ("the actor loop"). Concrete
@@ -15,8 +40,9 @@ import kotlinx.coroutines.currentCoroutineContext
  * executed on the actor loop coroutine.
  *
  * Commands are delivered via a mailbox backed by a Kotlin [Channel]. The mailbox capacity is
- * configured by [capacity]. Sending is non-suspending (fails fast when the mailbox is full or the
- * actor is not running), so callers should be prepared to handle backpressure/failures.
+ * configured by [capacity] and [overflowStrategy]. Sending is non-suspending. With the default
+ * [OverflowStrategy.Reject] policy, sending fails fast when the mailbox is full or the actor
+ * is not running, so callers should be prepared to handle backpressure/failures.
  *
  * ### Concurrency
  * - The library invokes [postStart], [handle], [preStop], [postStop] on the actor loop coroutine.
@@ -28,10 +54,20 @@ import kotlinx.coroutines.currentCoroutineContext
  * - If [handle] is cancelled, cancellation is rethrown and the actor shuts down.
  *
  * See [ActorContext.guardActorAccess] for a runtime guard and usage guidance.
+ *
+ * @property capacity Maximum number of user commands that may wait in the mailbox at once. `0`
+ * means rendezvous-style admission with no extra buffering. Use a concrete value when mailbox
+ * sizing matters semantically for the actor.
+ * @property overflowStrategy Policy used when the user mailbox cannot accept another command.
  */
 abstract class Actor<Command : Any>(
-    internal val capacity: Int = Channel.BUFFERED,
+    internal val capacity: Int = DEFAULT_MAILBOX_CAPACITY,
+    internal val overflowStrategy: OverflowStrategy = OverflowStrategy.Reject,
 ) {
+    init {
+        require(capacity >= 0) { "Actor mailbox capacity must be non-negative." }
+    }
+
     /**
      * Called once after the actor loop is created and before the actor starts processing commands.
      *
@@ -102,7 +138,6 @@ abstract class Actor<Command : Any>(
      *
      * Typical reasons are:
      * - the actor is shutting down and the mailbox is closed
-     * - the mailbox is full and the send operation fails fast
      * - the actor failed while there were still queued commands
      *
      * This callback is invoked on the actor loop coroutine while shutting down. It must be fast and

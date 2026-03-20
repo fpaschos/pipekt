@@ -11,6 +11,7 @@ import io.github.fpaschos.pipekt.actor.ActorUnavailableReason
 import io.github.fpaschos.pipekt.actor.AskReplyHandle
 import io.github.fpaschos.pipekt.actor.DefaultActorContext
 import io.github.fpaschos.pipekt.actor.DefaultActorRef
+import io.github.fpaschos.pipekt.actor.OverflowStrategy
 import io.github.fpaschos.pipekt.actor.TimerKey
 import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CancellationException
@@ -42,6 +43,7 @@ internal class ActorRuntime<Command : Any>(
 ) {
     private val scope = createActorScope(parentScope, name, dispatcher)
     private val mailbox = Channel<CommandEnvelope<Command>>(actor.capacity)
+    private val overflowStrategy = actor.overflowStrategy
     private val systemQueue = Channel<SystemEvent<Command>>(capacity = Channel.UNLIMITED)
     private val started = CompletableDeferred<Unit>()
     private val terminated = CompletableDeferred<Unit>()
@@ -174,7 +176,7 @@ internal class ActorRuntime<Command : Any>(
         if (sendResult.isSuccess) {
             return Result.success(Unit)
         }
-        return sendResult.toActorSendResult(label)
+        return sendResult.toActorSendResult(label, overflowStrategy)
     }
 
     suspend fun shutdown(timeout: Duration?) {
@@ -511,7 +513,10 @@ private object UnsetStopTimeout
 
 private val UNSET_STOP_TIMEOUT: Any = UnsetStopTimeout
 
-private fun ChannelResult<Unit>.toActorSendResult(label: String): Result<Unit> =
+private fun ChannelResult<Unit>.toActorSendResult(
+    label: String,
+    overflowStrategy: OverflowStrategy,
+): Result<Unit> =
     when {
         isSuccess -> {
             Result.success(Unit)
@@ -528,12 +533,16 @@ private fun ChannelResult<Unit>.toActorSendResult(label: String): Result<Unit> =
         }
 
         else -> {
-            Result.failure(
-                ActorUnavailable(
-                    reason = ActorUnavailableReason.MAILBOX_FULL,
-                    label = label,
-                    cause = exceptionOrNull(),
-                ),
-            )
+            when (overflowStrategy) {
+                OverflowStrategy.Reject -> {
+                    Result.failure(
+                        ActorUnavailable(
+                            reason = ActorUnavailableReason.MAILBOX_FULL,
+                            label = label,
+                            cause = exceptionOrNull(),
+                        ),
+                    )
+                }
+            }
         }
     }

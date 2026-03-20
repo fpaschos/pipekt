@@ -83,7 +83,7 @@ Final implementation/planning list:
 24. Keep the default failure policy: handler failure stops the actor.
     Restart remains external, driven by watch/supervision logic rather than in-runtime restart.
 
-25. Keep the current `onCommandFailure` and `onUndeliveredCommand` hooks in this pass.
+25. Keep the current `onFailure` and `onUndelivered` hooks in this pass.
     Adapt them to the new request/reply model rather than removing them.
 
 26. Preserve current external `ask()` failure semantics under the new reply model.

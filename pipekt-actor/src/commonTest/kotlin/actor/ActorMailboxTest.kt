@@ -127,6 +127,31 @@ class ActorMailboxTest :
             }
         }
 
+        test("overflow rejection fails tell without reporting undelivered") {
+            runTest {
+                val undelivered = mutableListOf<String>()
+                val gate = CompletableDeferred<Unit>()
+                val ref = spawn("overflow-reject-actor") { RecordingActor(undelivered, capacity = 1) }
+
+                ref.tell(TestCommand.Block(gate)).shouldBeSuccess(Unit)
+                runCurrent()
+
+                ref.tell(TestCommand.Record("queued")).shouldBeSuccess(Unit)
+                ref
+                    .tell(TestCommand.Record("overflow"))
+                    .shouldBeFailure()
+                    .shouldBeInstanceOf<ActorUnavailable>()
+                    .reason shouldBe
+                    ActorUnavailableReason.MAILBOX_FULL
+
+                undelivered shouldBe emptyList()
+
+                gate.complete(Unit)
+                advanceUntilIdle()
+                ref.shutdown()
+            }
+        }
+
         test("first shutdown timeout wins across concurrent callers") {
             runTest {
                 val currentGate = CompletableDeferred<Unit>()

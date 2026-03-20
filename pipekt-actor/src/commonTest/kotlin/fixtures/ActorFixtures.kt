@@ -1,9 +1,9 @@
 package io.github.fpaschos.pipekt.fixtures
 
 import io.github.fpaschos.pipekt.actor.ActorRef
+import io.github.fpaschos.pipekt.actor.DEFAULT_MAILBOX_CAPACITY
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineName
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
@@ -70,7 +70,7 @@ sealed interface TestCommand {
 class MinimalActor(
     private val events: EventRecorder = EventRecorder(),
     private val startupGate: CompletableDeferred<Unit>? = null,
-    capacity: Int = Channel.BUFFERED,
+    capacity: Int = DEFAULT_MAILBOX_CAPACITY,
 ) : io.github.fpaschos.pipekt.actor.Actor<TestCommand>(capacity) {
     private val recorded = mutableListOf<String>()
 
@@ -155,7 +155,8 @@ class MinimalActor(
 
 class RecordingActor(
     private val undelivered: MutableList<String>,
-) : io.github.fpaschos.pipekt.actor.Actor<TestCommand>(Channel.BUFFERED) {
+    capacity: Int = DEFAULT_MAILBOX_CAPACITY,
+) : io.github.fpaschos.pipekt.actor.Actor<TestCommand>(capacity) {
     override suspend fun handle(
         ctx: io.github.fpaschos.pipekt.actor.ActorContext<TestCommand>,
         command: TestCommand,
@@ -179,7 +180,9 @@ class RecordingActor(
                 command.replyTo.tell("echo: ${command.value}")
             }
 
-            is TestCommand.Block -> {}
+            is TestCommand.Block -> {
+                command.gate.await()
+            }
 
             is TestCommand.LoopName -> {
                 command.replyTo.tell("missing")
@@ -230,7 +233,7 @@ class RecordingActor(
 
 class FailingStartActor(
     private val startupFailure: Throwable,
-) : io.github.fpaschos.pipekt.actor.Actor<TestCommand>(Channel.BUFFERED) {
+) : io.github.fpaschos.pipekt.actor.Actor<TestCommand>(DEFAULT_MAILBOX_CAPACITY) {
     override suspend fun postStart(ctx: io.github.fpaschos.pipekt.actor.ActorContext<TestCommand>): Unit = throw startupFailure
 
     override suspend fun handle(
@@ -287,7 +290,7 @@ sealed interface ParentCommand {
 
 class ChildActor(
     private val events: EventRecorder,
-) : io.github.fpaschos.pipekt.actor.Actor<ChildCommand>(Channel.BUFFERED) {
+) : io.github.fpaschos.pipekt.actor.Actor<ChildCommand>(DEFAULT_MAILBOX_CAPACITY) {
     override suspend fun handle(
         ctx: io.github.fpaschos.pipekt.actor.ActorContext<ChildCommand>,
         command: ChildCommand,
@@ -308,7 +311,7 @@ class ParentActor(
     private val events: EventRecorder,
     private val childRef: CompletableDeferred<ActorRef<ChildCommand>>? = null,
     private val selfRef: CompletableDeferred<ActorRef<ParentCommand>>? = null,
-    capacity: Int = Channel.BUFFERED,
+    capacity: Int = DEFAULT_MAILBOX_CAPACITY,
 ) : io.github.fpaschos.pipekt.actor.Actor<ParentCommand>(capacity) {
     private lateinit var child: ActorRef<ChildCommand>
 

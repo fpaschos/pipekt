@@ -395,10 +395,18 @@ private sealed interface RuntimeCommand {
     ) : RuntimeCommand
 }
 
+/**
+ * Owns one started [PipelineRuntime] and its worker actors.
+ *
+ * This actor does not accept external user traffic after startup. It only reacts to watch
+ * notifications from owned workers, which are delivered on the actor system queue rather than the
+ * user mailbox. `capacity = 0` makes that intent explicit and avoids an unnecessary buffered user
+ * mailbox that nothing should write to.
+ */
 private class PipelineRuntimeActor(
     private val runtime: PipelineRuntime,
     private val config: RuntimeConfig,
-) : Actor<RuntimeCommand>() {
+) : Actor<RuntimeCommand>(capacity = 0) {
     private val workers = mutableListOf<ActorRef<WorkerCommand>>()
 
     override suspend fun postStart(ctx: ActorContext<RuntimeCommand>) {
@@ -451,10 +459,17 @@ private sealed interface WorkerCommand {
     data object Tick : WorkerCommand
 }
 
+/**
+ * Drives ingress polling for one pipeline runtime.
+ *
+ * Work is scheduled entirely by self-timers. No external actor should enqueue user commands here,
+ * so `capacity = 0` documents that the user mailbox is intentionally unused while timer events keep
+ * flowing through the internal system queue.
+ */
 private class IngressWorkerActor(
     private val runtime: PipelineRuntime,
     private val config: RuntimeConfig,
-) : Actor<WorkerCommand>() {
+) : Actor<WorkerCommand>(capacity = 0) {
     private val tickTimerKey = TimerKey("ingress-worker-tick")
 
     override suspend fun postStart(ctx: ActorContext<WorkerCommand>) {
@@ -480,11 +495,17 @@ private class IngressWorkerActor(
     }
 }
 
+/**
+ * Drives one pipeline step execution loop.
+ *
+ * Like [IngressWorkerActor], this actor advances itself through timer events and does not expose a
+ * user-command protocol. `capacity = 0` makes that no-user-mailbox design explicit.
+ */
 private class StepWorkerActor(
     private val runtime: PipelineRuntime,
     private val config: RuntimeConfig,
     private val stepName: String,
-) : Actor<WorkerCommand>() {
+) : Actor<WorkerCommand>(capacity = 0) {
     private val tickTimerKey = TimerKey("step-worker-tick")
 
     override suspend fun postStart(ctx: ActorContext<WorkerCommand>) {

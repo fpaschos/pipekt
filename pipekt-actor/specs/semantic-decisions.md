@@ -2,8 +2,8 @@
 
 This file records the design choices implemented by the current actor runtime.
 
-1. Keep a bounded user mailbox with fail-fast `tell()`.
-   `tell()` is non-suspending and reports `MAILBOX_FULL` or `ACTOR_CLOSED`.
+1. Keep a bounded user mailbox with explicit capacity and fail-fast `tell()`.
+   `tell()` is non-suspending and, with the default `Reject` overflow strategy, reports `MAILBOX_FULL` or `ACTOR_CLOSED`.
 
 2. Keep external `ask()`, but model replies with `replyTo: ActorRef<T>`.
    `ask()` remains a convenience API layered on top of normal actor messaging by creating a
